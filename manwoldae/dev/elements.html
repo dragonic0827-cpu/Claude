@@ -1,0 +1,324 @@
+<!doctype html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<title>계단·회랑·담장 확인</title>
+<script type="importmap">{"imports":{"three":"https://cdn.jsdelivr.net/npm/three@0.170.0/build/three.module.js","three/addons/":"https://cdn.jsdelivr.net/npm/three@0.170.0/examples/jsm/"}}</script>
+<style>html,body{margin:0;height:100%;background:#a9c3d6;overflow:hidden}canvas{display:block}
+#hud{position:fixed;left:8px;top:8px;font:12px/1.4 sans-serif;color:#223;background:#fff9;padding:4px 8px;border-radius:4px}</style>
+</head>
+<body>
+<div id="hud"></div>
+<script type="module">
+// 계단·다리·회랑·담장·기념물 확인 — 실제 spec 정의로 만든 작은 장면
+// (대계단 4개 + 회경전 일곽 회랑 + 연결회랑 + 좌춘궁 담장(문 틈) + 궁성 동벽 수구 + 금교 + 첨성대·비좌)
+import * as THREE from 'three';
+import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
+import { createMaterials } from '../src/core/materials.js';
+import { createStairs, createBridge, createCorridor, createWall, createLandmark, mergeElements, pickIdAt } from '../src/arch/elements.js';
+import spec from '../src/data/spec.js';
+
+const renderer = new THREE.WebGLRenderer({ antialias: true });
+renderer.setPixelRatio(Math.min(devicePixelRatio, 2));
+renderer.setSize(innerWidth, innerHeight);
+renderer.outputColorSpace = THREE.SRGBColorSpace;
+renderer.toneMapping = THREE.ACESFilmicToneMapping;
+renderer.toneMappingExposure = 1.0;
+renderer.shadowMap.enabled = true;
+renderer.shadowMap.type = THREE.PCFSoftShadowMap;
+document.body.appendChild(renderer.domElement);
+const scene = new THREE.Scene();
+scene.background = new THREE.Color('#a9c3d6');
+scene.fog = new THREE.Fog('#b9cbd8', 250, 900);
+const cam = new THREE.PerspectiveCamera(45, innerWidth / innerHeight, 0.1, 2000);
+const ctl = new OrbitControls(cam, renderer.domElement);
+const hemi = new THREE.HemisphereLight(0xd4e2ee, 0x7d6a55, 1.05);
+scene.add(hemi);
+const sun = new THREE.DirectionalLight(0xfff0dc, 2.9);
+sun.castShadow = true;
+sun.shadow.mapSize.set(2048, 2048);
+Object.assign(sun.shadow.camera, { left: -40, right: 40, top: 40, bottom: -40, near: 1, far: 260 });
+sun.shadow.bias = -0.0003; sun.shadow.normalBias = 0.025;
+scene.add(sun, sun.target);
+// 오전 햇빛(남동쪽에서, 고도 약 35°)
+const SUN_DIR = new THREE.Vector3(0.55, 0.62, 0.56).normalize();
+
+const mats = createMaterials(spec.palette);
+// ?set=jh → 장화전·경령전 회랑 묶음(모서리·T자·늘임 끝 확인)
+const SET = new URLSearchParams(location.search).get('set') || 'main';
+const DETAIL = new URLSearchParams(location.search).get('detail') || 'high';   // ?detail=low → 휴대폰용 회랑
+const byId = (arr, id) => arr.find((o) => o.id === id);
+
+// ── 받침 대지(상자) : 실제 범위·높이 ──
+const terraceIds = SET === 'jh' ? ['janghwa', 'link', 'gyeong_up', 'gyeong_low', 'wondeok', 'w5']
+  : ['hoegyeong_court', 'changhap_court', 'link', 'janghwa', 'gujeong_n_c', 'gujeong', 'jwachun', 'sinbong_base',
+    ...[1, 2, 3, 4, 5].flatMap((k) => [`daegye_upper_${k}`, `daegye_lower_${k}`])];
+const clipZ = SET === 'jh' ? {} : { changhap_court: [82, 125], janghwa: [-72, -47.5], jwachun: [90, 170.25], gujeong: [209.5, 226] };
+const stubTer = [];
+for (const id of terraceIds) {
+  const t = byId(spec.terraces, id);
+  if (!t) continue;
+  let z0 = t.cz - t.d / 2, z1 = t.cz + t.d / 2;
+  if (clipZ[id]) { z0 = Math.max(z0, clipZ[id][0]); z1 = Math.min(z1, clipZ[id][1]); }
+  let x0 = t.cx - t.w / 2, x1 = t.cx + t.w / 2;
+  if (id === 'gujeong') { x0 = -40; x1 = 30; }
+  stubTer.push({ id, x0, x1, z0, z1, top: t.topY, bottom: t.bottomY - 2 });
+}
+const topMat = mats.courtyard, earthTop = mats.packedEarth;
+for (const t of stubTer) {
+  const w = t.x1 - t.x0, d = t.z1 - t.z0, h = t.top - t.bottom;
+  const g = new THREE.BoxGeometry(w, h, d);
+  // 옆면 uv: 장대석 4 m × 2 m
+  const uv = g.attributes.uv, pos = g.attributes.position, nor = g.attributes.normal;
+  for (let i = 0; i < uv.count; i++) {
+    const x = pos.getX(i) + (t.x0 + t.x1) / 2, y = pos.getY(i) + (t.top + t.bottom) / 2, z = pos.getZ(i) + (t.z0 + t.z1) / 2;
+    const ny = Math.abs(nor.getY(i)), nx = Math.abs(nor.getX(i));
+    if (ny > 0.5) uv.setXY(i, x / 6, z / 6); else if (nx > 0.5) uv.setXY(i, z / 4, y / 2); else uv.setXY(i, x / 4, y / 2);
+  }
+  const stone = byId(spec.terraces, t.id).surface === 'stone';
+  const m = new THREE.Mesh(g, [mats.stone, mats.stone, stone ? topMat : earthTop, mats.stone, mats.stone, mats.stone]);
+  m.position.set((t.x0 + t.x1) / 2, (t.top + t.bottom) / 2, (t.z0 + t.z1) / 2);
+  m.castShadow = m.receiveShadow = true;
+  scene.add(m);
+}
+
+// ── 지형 흉내: 평지(−9.5) + 광명천 석축 물길 ──
+const stream = spec.terrain.streams.find((s) => s.id === 'gwangmyeongcheon');
+function streamInfo(x, z) {
+  let best = { d: Infinity, wy: -11 };
+  const P = stream.path;
+  for (let i = 0; i < P.length - 1; i++) {
+    const ax = P[i][0], az = P[i][1], bx = P[i + 1][0], bz = P[i + 1][1];
+    const dx = bx - ax, dz = bz - az;
+    const t = Math.max(0, Math.min(1, ((x - ax) * dx + (z - az) * dz) / (dx * dx + dz * dz)));
+    const d = Math.hypot(x - ax - dx * t, z - az - dz * t);
+    if (d < best.d) best = { d, wy: stream.waterY[i] + (stream.waterY[i + 1] - stream.waterY[i]) * t };
+  }
+  return best;
+}
+function natural(x, z) {
+  let y = -9.5 + Math.max(0, x - 140) * 0.02 + 9 * Math.exp(-((x - 172) ** 2 + (z - 120) ** 2) / 700);
+  const s = streamInfo(x, z);
+  if (s.d < 3.5) y = s.wy - 0.6;
+  else if (s.d < 4.2) y = THREE.MathUtils.lerp(s.wy - 0.6, y, (s.d - 3.5) / 0.7);
+  return y;
+}
+function heightAt(x, z) {
+  let top = -Infinity;
+  for (const t of stubTer) if (x >= t.x0 && x <= t.x1 && z >= t.z0 && z <= t.z1) top = Math.max(top, t.top);
+  return top > -Infinity ? top : natural(x, z);
+}
+{
+  // 지면 격자
+  const X0 = -70, X1 = 200, Z0 = 60, Z1 = 290, S = 2;
+  const nx = (X1 - X0) / S, nz = (Z1 - Z0) / S;
+  const g = new THREE.PlaneGeometry(X1 - X0, Z1 - Z0, nx, nz).rotateX(-Math.PI / 2);
+  const pos = g.attributes.position, uv = g.attributes.uv;
+  for (let i = 0; i < pos.count; i++) {
+    const x = pos.getX(i) + (X0 + X1) / 2, z = pos.getZ(i) + (Z0 + Z1) / 2;
+    pos.setXYZ(i, x, natural(x, z), z);
+    uv.setXY(i, x / 8, z / 8);
+  }
+  g.computeVertexNormals();
+  const m = new THREE.Mesh(g, mats.grass);
+  m.receiveShadow = true;
+  scene.add(m);
+  // 북쪽(회경전 쪽) 바닥
+  const g2 = new THREE.PlaneGeometry(420, 360).rotateX(-Math.PI / 2);
+  const m2 = new THREE.Mesh(g2, mats.grass);
+  m2.position.set(20, -9.7, -120);
+  m2.receiveShadow = true;
+  scene.add(m2);
+  // 물: 광명천 리본
+  const P = stream.path, wpos = [], idx = [];
+  for (let i = 0; i < P.length; i++) {
+    const a = P[Math.max(0, i - 1)], b = P[Math.min(P.length - 1, i + 1)];
+    const dx = b[0] - a[0], dz = b[1] - a[1], l = Math.hypot(dx, dz);
+    const nx2 = dz / l, nz2 = -dx / l;
+    const y = stream.waterY[i];
+    wpos.push(P[i][0] + nx2 * 3.6, y, P[i][1] + nz2 * 3.6, P[i][0] - nx2 * 3.6, y, P[i][1] - nz2 * 3.6);
+    if (i > 0) { const k = 2 * i; idx.push(k - 2, k - 1, k, k - 1, k + 1, k); }
+  }
+  const wg = new THREE.BufferGeometry();
+  wg.setAttribute('position', new THREE.Float32BufferAttribute(wpos, 3));
+  wg.setIndex(idx);
+  wg.computeVertexNormals();
+  const water = new THREE.Mesh(wg, mats.water);
+  water.material.side = THREE.DoubleSide;
+  scene.add(water);
+}
+
+// 궁 안 석축 물길(곧은 구간 x −50…95): 호안 벽 + 바닥
+{
+  for (const sd of [-1, 1]) {
+    const g = new THREE.BoxGeometry(145, 3.2, 0.5);
+    const uv = g.attributes.uv, pos = g.attributes.position;
+    for (let i = 0; i < uv.count; i++) uv.setXY(i, pos.getX(i) / 4, pos.getY(i) / 2);
+    const m = new THREE.Mesh(g, mats.stone);
+    m.position.set(22.5, -9.5 - 1.6 + 0.001, 205 + sd * 3.75);
+    m.castShadow = m.receiveShadow = true;
+    scene.add(m);
+  }
+  const bed = new THREE.Mesh(new THREE.PlaneGeometry(145, 7).rotateX(-Math.PI / 2), mats.stoneRubble);
+  bed.position.set(22.5, -11.95, 205);
+  bed.receiveShadow = true;
+  scene.add(bed);
+}
+
+// ── 건물 자리(상자) ──
+const stubB = SET === 'jh'
+  ? ['janghwajeon', 'janghwa_seomu', 'janghwa_dongmu', 'janghwa_dwitchae', 'janghwajeonmun', 'janghwa_bukmun', 'w5_gate', 'gyeongnyeongjeon', 'gyeong_18', 'gyeong_gate', 'wondeokjeonmun']
+  : ['hoegyeongjeon', 'hoegyeongjeonmun', 'hoedongmun', 'taehwamun', 'janghwajeonmun', 'sinbongmun', 'changhapmun'];
+const bMat = new THREE.MeshStandardMaterial({ color: '#c9bfae', roughness: 0.9 });
+const bTop = new THREE.MeshStandardMaterial({ color: '#8a3a2b', roughness: 0.8 });
+for (const id of stubB) {
+  const b = byId(spec.buildings, id);
+  if (!b) continue;
+  const g = new THREE.Group();
+  const plat = new THREE.Mesh(new THREE.BoxGeometry(b.platformW, b.platformHeight + 0.5, b.platformD), mats.stone);
+  plat.position.y = b.groundY + (b.platformHeight - 0.5) / 2;
+  const hb = b.kind === 'hall' ? 9 : 7;
+  const vol = new THREE.Mesh(new THREE.BoxGeometry(b.columnSpanW || b.platformW - 2, hb, (b.columnSpanD || b.platformD - 2)), bMat);
+  vol.position.y = b.groundY + b.platformHeight + hb / 2;
+  const cap = new THREE.Mesh(new THREE.BoxGeometry((b.columnSpanW || b.platformW) + 3, 0.6, (b.columnSpanD || b.platformD) + 3), bTop);
+  cap.position.y = b.groundY + b.platformHeight + hb;
+  g.add(plat, vol, cap);
+  g.position.set(b.cx, 0, b.cz);
+  g.rotation.y = -THREE.MathUtils.degToRad(b.rotationDeg || 0);
+  g.traverse((o) => { if (o.isMesh) o.castShadow = o.receiveShadow = true; });
+  scene.add(g);
+}
+
+// ── 요소들 ──
+const t0 = performance.now();
+const made = [];
+const add = (o) => { scene.add(o); made.push(o); return o; };
+const ctx = { buildings: spec.buildings, terraces: spec.terraces, corridors: spec.corridors, stairs: spec.stairs, detail: DETAIL };
+if (SET === 'jh') {
+  for (const id of ['st_link_w', 'st_link_c', 'st_wondeok', 'st_w5', 'st_gyeong_mid', 'st_gyeong_gate']) add(createStairs(byId(spec.stairs, id), mats));
+  for (const c of spec.corridors) if (/^jh_|^link|^gy_/.test(c.id)) add(createCorridor(c, mats, heightAt, ctx));
+  for (const id of ['wall_wondeok', 'gyeong_low_e', 'gyeong_low_w']) add(createWall(byId(spec.walls, id), mats, heightAt, ctx));
+} else {
+  for (const id of ['st_daegye_1', 'st_daegye_2', 'st_daegye_3', 'st_daegye_4', 'st_link_w', 'st_sinbong_s']) add(createStairs(byId(spec.stairs, id), mats));
+  for (const id of ['hg_s_w', 'hg_s_e', 'hg_w_s', 'hg_main', 'cheonrang', 'link_1', 'link_2', 'jh_s_w']) add(createCorridor(byId(spec.corridors, id), mats, heightAt, ctx));
+  // 좌춘궁 담장: 태화문 틈을 메운 닫힌 경로 → 문 기단에서 끊기는지 확인
+  const jw = byId(spec.walls, 'wall_jwachun');
+  add(createWall({ ...jw, id: 'wall_jwachun_test', path: [[62.5, 164.5], [62.5, 95.5], [131.5, 95.5], [131.5, 164.5]], closed: true }, mats, heightAt, ctx));
+  add(createWall(byId(spec.walls, 'gungseong'), mats, heightAt, ctx));
+  for (const id of ['ch_w', 'ch_e']) add(createWall(byId(spec.walls, id), mats, heightAt, ctx));
+  // 나성(토석 혼축) 흉내: 언덕을 넘는 짧은 구간
+  add(createWall({ ...byId(spec.walls, 'naseong'), id: 'naseong_test', closed: false, waterGates: [], path: [[150, 88], [168, 112], [178, 140], [196, 160]] }, mats, heightAt, ctx));
+  add(createBridge(byId(spec.bridges, 'geumgyo'), mats, { streams: spec.terrain.streams }));
+  add(createBridge(byId(spec.bridges, 'bridge_w'), mats, { streams: spec.terrain.streams }));
+  add(createLandmark({ ...byId(spec.landmarks, 'cheomseongdae'), x: 45, z: 125, y: undefined }, mats, heightAt));
+  add(createLandmark({ ...byId(spec.landmarks, 'bijwa'), x: 45, z: 140, y: undefined }, mats, heightAt));
+  add(createLandmark(byId(spec.landmarks, 'gujeong_marker'), mats, heightAt));
+}
+const buildMs = Math.round(performance.now() - t0);
+
+const triOf = (o) => { let n = 0; o.traverse((m) => { if (m.isMesh) n += (m.geometry.index ? m.geometry.index.count : m.geometry.attributes.position.count) / 3; }); return n; };
+const meshOf = (o) => { let n = 0; o.traverse((m) => { if (m.isMesh) n++; }); return n; };
+
+const render = () => {
+  renderer.render(scene, cam);
+  document.getElementById('hud').textContent = `calls ${renderer.info.render.calls} · tris ${renderer.info.render.triangles.toLocaleString()} · build ${buildMs} ms`;
+};
+ctl.addEventListener('change', () => { placeSun(ctl.target); render(); });
+function placeSun(t) {
+  sun.target.position.copy(t);
+  sun.position.copy(t).addScaledVector(SUN_DIR, 120);
+  sun.target.updateMatrixWorld();
+}
+const v = (p, t, fov = 45) => {
+  cam.fov = fov; cam.updateProjectionMatrix();
+  cam.position.set(...p); ctl.target.set(...t); ctl.update();
+  placeSun(ctl.target);
+  render();
+};
+window.__views = {
+  daegye: () => v([0.8, -5.8, 96.5], [0.8, -2.8, 70], 50),
+  daegye_side: () => v([-52, 1, 98], [-16, -4, 74], 40),
+  daegye_close: () => v([-3.8, -5.9, 86.5], [-8, -4.4, 77], 50),
+  daegye_top: () => v([-15, 1.7, 68.6], [-7, -3.5, 80], 55),
+  daegye_foot: () => v([-19.5, -6.2, 84.5], [-25.5, -6.4, 81], 55),
+  daegye_mid: () => v([-9.6, -2.6, 77.5], [-3.6, -2.4, 74], 60),
+  court: () => v([14, 1.7, 30], [-20, 3, -8], 55),
+  corridor: () => v([-12, 1.9, 36], [-28, 3.2, 44], 55),
+  corridor_corner: () => v([-14, 2.2, 49], [-28.5, 3.6, 63.5], 55),
+  corridor_nw: () => v([-14, 2.2, -14], [-28.5, 3.6, -28.8], 55),
+  corridor_out: () => v([27, 1.7, 69], [8, 3.4, 64], 55),
+  eave: () => v([-20.5, 2.2, 40], [-26, 3.6, 42.5], 55),
+  bracket: () => v([-23.2, 2.6, 44.6], [-26.6, 3.55, 42.3], 50),
+  gable_hg: () => v([-40, 4.5, 30], [-28.5, 4.5, 25.4], 50),
+  corridor_north: () => v([12, 4, -46], [-4, 3, -30], 50),
+  cheonrang: () => v([16, 5.5, -19], [-1, 4, -21], 50),
+  gable: () => v([-17, 5, -51], [-7.5, 5, -56.5], 55),
+  cheonrang_air: () => v([12, 15, -14], [-1, 5, -27], 50),
+  link_air: () => v([14, 16, -30], [-4, 3, -42], 50),
+  link_in: () => v([-3, 1.9, -40.5], [-5, 2.6, -28.5], 60),
+  gate_end: () => v([-2, 2.0, 50], [-10.5, 3, 62], 55),
+  corridor_air: () => v([60, 55, 95], [0, 0, 20], 45),
+  corridor_under: () => v([-26.5, 1.6, 30], [-28.5, 4.6, 36], 70),
+  link: () => v([16, 6, -40], [-4, 2.5, -40], 50),
+  wall_gate: () => v([97, -6.4, 186], [97, -5.5, 164.5], 45),
+  wall_close: () => v([-27.5, -5.6, 116], [-32, -5.2, 110], 55),
+  palace_wall: () => v([176, -9.6, 227], [159, -10.5, 217.2], 55),
+  palace_wall_far: () => v([120, 6, 250], [158, -6, 216], 50),
+  bridge: () => v([9, -10.2, 205.4], [-3.3, -10.4, 205.3], 55),
+  bridge_oblique: () => v([8, -7.2, 214], [-3.3, -10, 205.3], 50),
+  stair_proj: () => v([4.5, -8.2, 197.5], [-3.3, -8.6, 190.5], 50),
+  bridge_top: () => v([4, -6, 196], [-3.3, -9.6, 205.3], 55),
+  cheomseongdae: () => v([50.5, -7.6, 131], [45, -8, 125], 45),
+  bijwa: () => v([46.8, -8.2, 142.4], [45, -9.3, 140], 45),
+  city_wall: () => v([190, -4, 105], [170, -2, 125], 50),
+  slab_bridge: () => v([-24, -8.4, 213], [-30, -10.2, 205.3], 55),
+  jh_air: () => v([90, 60, -20], [27, 0, -98], 45),
+  jh_se: () => v([40, 6, -62], [52, 5, -52], 55),
+  jh_sw: () => v([10, 6, -66], [-3, 5, -56], 55),
+  jh_nw: () => v([14, 5.5, -128], [4.5, 5.5, -137], 55),
+  gy_air: () => v([-70, 30, -190], [-103, 8, -220], 45),
+};
+window.__info = () => ({
+  calls: renderer.info.render.calls, triangles: renderer.info.render.triangles, buildMs,
+  objects: made.map((o) => ({ id: o.userData.id || o.name, meshes: meshOf(o), tris: triOf(o), ends: o.userData.ends, problems: o.userData.problems })),
+});
+// spec 전체를 만들어 삼각형 수만 셉니다(장면에 넣지 않음)
+window.__wallCheck = () => spec.walls.map((d) => { const o = createWall(d, mats, (x, z) => -9.5, ctx); const r = [d.id, o.userData.spans, o.userData.tris]; o.traverse((q) => q.isMesh && q.geometry.dispose()); return r.join(':'); }).join(' ');
+// 합치기 확인: 계단·담장을 재질별로 합쳐 장면의 원래 것과 바꿈
+window.__mergeTest = () => {
+  const pick = made.filter((o) => /^st_|wall|gungseong|naseong|ch_/.test(o.userData.id || ''));
+  pick.forEach((o) => scene.remove(o));
+  const g = mergeElements(pick, 'merged');
+  scene.add(g);
+  render();
+  const m = g.children[0];
+  return { meshes: g.children.length, calls: renderer.info.render.calls, sample: pickIdAt(m, 0), last: pickIdAt(m, m.geometry.index.count / 3 - 1) };
+};
+window.__buildAll = () => {
+  const out = {};
+  const count = (list, fn) => {
+    let tris = 0, meshes = 0, ms = performance.now();
+    const per = [];
+    for (const d of list) {
+      const o = fn(d);
+      const t = triOf(o), m = meshOf(o);
+      tris += t; meshes += m;
+      per.push([d.id, t, m]);
+      o.traverse((q) => { if (q.isMesh) q.geometry.dispose(); });
+    }
+    return { tris, meshes, ms: Math.round(performance.now() - ms), per };
+  };
+  const flat = (x, z) => -9.5 + Math.sin(x * 0.01) * 3 + Math.cos(z * 0.013) * 3;
+  out.stairs = count(spec.stairs, (d) => createStairs(d, mats));
+  out.bridges = count(spec.bridges, (d) => createBridge(d, mats, { streams: spec.terrain.streams }));
+  out.corridors = count(spec.corridors, (d) => createCorridor(d, mats, flat, ctx));
+  out.corridorsLow = count(spec.corridors, (d) => createCorridor(d, mats, flat, { ...ctx, detail: 'low' }));
+  out.walls = count(spec.walls, (d) => createWall(d, mats, flat, ctx));
+  out.landmarks = count(spec.landmarks, (d) => createLandmark(d, mats, flat));
+  return out;
+};
+(SET === 'jh' ? window.__views.jh_air : window.__views.daegye)();
+window.__ready = true;
+</script>
+</body>
+</html>

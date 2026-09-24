@@ -296,8 +296,10 @@ export function groundTexture(base = '#7a7a4a', seed = 13, { grass = true } = {}
     const x = rand() * 512, y = rand() * 512, r = 10 + rand() * 50;
     ctx.save();
     ctx.translate(x, y); ctx.scale(r, r);
-    g.addColorStop(0, shade(base, (rand() - 0.5) * 0.35));
-    g.addColorStop(1, 'rgba(0,0,0,0)');
+    // 바깥 정지점은 같은 색의 투명으로 (검정 투명으로 두면 가장자리가 어둡게 번져 얼룩이 생김)
+    const col = shade(base, (rand() - 0.5) * 0.35);
+    g.addColorStop(0, col);
+    g.addColorStop(1, col + '00');
     ctx.fillStyle = g;
     ctx.beginPath(); ctx.arc(0, 0, 1, 0, Math.PI * 2); ctx.fill();
     ctx.restore();

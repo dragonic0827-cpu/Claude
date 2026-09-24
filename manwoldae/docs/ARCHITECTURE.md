@@ -29,7 +29,7 @@
 | `src/core/materials.js` | `createMaterials(palette)` → `mats` | 모든 공유 재질. 새 재질이 필요하면 여기에 추가 |
 | `src/arch/building.js` | `createBuilding(def, mats, opts)` → `Group` | 고려 목조건축(기단·초석·배흘림기둥·공포·단청·창호·팔작/우진각/맞배 지붕·치미) |
 | `src/arch/elements.js` | `createStairs(def, mats)`, `createBridge(def, mats)`, `createCorridor(def, mats, heightAt, ctx)`, `createWall(def, mats, heightAt, ctx)`, `createLandmark(def, mats, heightAt)` | 계단(소맷돌·답도), 회랑, 궁성 담장, 첨성대 등. `ctx = { buildings, terraces }` — 회랑·담장은 건물(문) 자리에서 끊깁니다 |
-| `src/world/terrain.js` | `createTerrain(spec, mats)` → `{ group, heightAt(x,z), groundAt(x,z) }` | 송악산·구릉·하천·연못 지형과 대지(축대). `heightAt` 은 걸을 수 있는 면(대지 윗면 포함) |
+| `src/world/terrain.js` | `createTerrain(spec, mats)` → `{ group, heightAt(x,z), groundAt(x,z), setPaving(alt), setRuins(on) }` | 송악산·구릉·하천·연못 지형과 대지(축대). `heightAt` 은 걸을 수 있는 면(대지 윗면 포함). `setRuins` 는 대지 윗면을 풀밭으로 |
 | `src/world/vegetation.js` | `createVegetation(spec, mats, heightAt, isBlocked)` → `Group` | 소나무 숲(인스턴싱) |
 | `src/world/sky.js` | `createEnvironment(renderer, scene, opts)` → `{ setTime(name), update(dt, camera), sun }` | 하늘·해/달·안개·조명·그림자, 시간대(아침/한낮/노을/달밤) |
 | `src/ui/*.js` | | 투어, 건물 정보 카드, 이름표, 미니맵, 도움말 |
@@ -49,4 +49,15 @@
 - `dev/*.html` — 모듈별 확인 페이지. 준비가 끝나면 `window.__ready = true`.
 - `node tools/shoot.mjs <페이지> --shot a.png` — 헤드리스 Chromium(WebGL)으로 스크린샷을 찍고
   콘솔 오류가 있으면 실패합니다. `--steps '[{"eval":"...","wait":500,"shot":"b.png"}]'` 로 여러 장.
-- 메인 앱은 테스트용으로 `window.__app` 을 노출합니다: `tour.go(i, instant)`, `setTime(name)`, `lookAt(camera, target)`.
+- 메인 앱은 테스트용으로 `window.__app` 을 노출합니다: `tour.go(i, instant)`, `setTime(name, instant)`, `lookAt(camera, target)`,
+  `setRuins(on)`, `setWalk(on)`, `select(id)`, `setAlt(id, on)`(복원 선택지 `paving`·`dapo`·`dc14`·`celadon`, Promise), `setQuality(level)`, `info()`.
+- `--mobile` 을 붙이면 휴대폰(터치·모바일 UA)으로 흉내 내어 앱의 휴대폰 경로(보통 화질·짧은 LOD 거리·조이스틱)를 점검합니다.
+
+## 통합(main.js)에서 정한 것
+
+- **패널만큼 화면 중심 옮기기**: 열린 시트(넓은 화면은 왼쪽·오른쪽, 좁은 화면은 아래)를 재서 `camera.setViewOffset` 으로
+  투영 중심을 옮깁니다. 투어 카메라는 이 상태(왼쪽 안내 패널)를 기준으로 잡았습니다. 이름표 투영·피킹은 그대로 맞습니다.
+- **걷기 시작점**: 땅에서 6 m 넘게 떠 있을 때 걷기를 켜면, 보던 곳에서 가장 가까운 마당(`WALK_SPOTS`)에 내려 그 전각을 바라봅니다.
+- **복원 선택지**: 뜰 바닥은 `terrain.setPaving`, 공포·단청·청자기와는 해당 전각만 `createBuildingLOD(def, mats, { dapo, dancheong14, celadon })`
+  로 다시 지어 바꿔 끼웁니다(재질은 모듈이 캐시하므로 지오메트리만 버림).
+- **정적 요소 합치기**: 계단·다리·담장과 회랑은 `mergeElements` 로 재질별 메시 하나씩. 피킹은 `pickIdAt(mesh, faceIndex)`.

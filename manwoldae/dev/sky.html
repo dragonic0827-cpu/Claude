@@ -1,0 +1,90 @@
+<!doctype html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>하늘·빛 확인</title>
+<script type="importmap">{"imports":{"three":"https://cdn.jsdelivr.net/npm/three@0.170.0/build/three.module.js","three/addons/":"https://cdn.jsdelivr.net/npm/three@0.170.0/examples/jsm/"}}</script>
+<style>
+html,body{margin:0;height:100%;background:#15191b;overflow:hidden;font:13px/1.4 system-ui,sans-serif}
+canvas{display:block}
+#hud{position:fixed;left:8px;top:8px;background:rgba(20,24,28,.72);color:#eee;padding:6px 9px;border-radius:4px;white-space:pre;pointer-events:none}
+#bar{position:fixed;right:8px;top:8px;display:flex;flex-wrap:wrap;gap:4px;max-width:70vw;justify-content:flex-end}
+#bar button{font:12px system-ui;padding:3px 7px;border-radius:3px;border:0;background:#2b3440;color:#eee;cursor:pointer}
+</style>
+</head>
+<body>
+<div id="hud">불러오는 중…</div>
+<div id="bar"></div>
+<script type="module">
+// 하늘·조명 확인: 지형 + 중심축 전각 몇 채 + 시간대 4가지 (?veg 로 숲 포함)
+import * as THREE from 'three';
+import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
+import spec from '../src/data/spec.js';
+import { createMaterials } from '../src/core/materials.js';
+import { createTerrain } from '../src/world/terrain.js';
+import { createVegetation } from '../src/world/vegetation.js';
+import * as B from '../src/arch/building.js';
+import { createEnvironment } from '../src/world/sky.js';
+
+const params = new URLSearchParams(location.search);
+const renderer = new THREE.WebGLRenderer({ antialias: true });
+renderer.setPixelRatio(Math.min(devicePixelRatio, 2));
+renderer.setSize(innerWidth, innerHeight);
+document.body.appendChild(renderer.domElement);
+const scene = new THREE.Scene();
+const cam = new THREE.PerspectiveCamera(45, innerWidth / innerHeight, 0.5, 12000);
+const ctl = new OrbitControls(cam, renderer.domElement);
+const mats = createMaterials(spec.palette);
+const env = createEnvironment(renderer, scene, { spec, camera: cam });
+const terrain = createTerrain(spec, mats);
+scene.add(terrain.group);
+const ids = (params.get('ids') || 'hoegyeongjeon,hoegyeongjeonmun,changhapmun,sinbongmun,janghwajeon,seungcheonmun_w,seungcheonmun_e,imcheongak').split(',');
+for (const def of spec.buildings) {
+  if (!ids.includes(def.id) && !params.has('all')) continue;
+  const make = B.createBuildingLOD || B.createBuilding;
+  const b = make(def, mats);
+  b.traverse((o) => { if (o.isMesh) o.castShadow = o.receiveShadow = true; });
+  scene.add(b);
+}
+if (params.has('veg')) scene.add(createVegetation(spec, mats, terrain.heightAt, () => false, { density: Number(params.get('veg') || 0.5) }));
+
+const hud = document.getElementById('hud');
+const render = () => {
+  env.update(0, cam, ctl.target);
+  renderer.render(scene, cam);
+  const i = renderer.info.render;
+  hud.textContent = `${env.current}\ncalls ${i.calls}  tris ${(i.triangles / 1000).toFixed(0)}k\nexposure ${renderer.toneMappingExposure.toFixed(2)}`;
+};
+ctl.addEventListener('change', render);
+const v = (p, t) => { cam.position.set(...p); ctl.target.set(...t); ctl.update(); render(); };
+window.__env = env;
+window.THREE = THREE; window.__scene = scene; window.__renderer = renderer; window.__cam = cam;
+window.__render = render;
+window.__views = {
+  hero: () => v([150, 55, 190], [-5, 2, 10]),
+  court: () => v([0.8, 1.6, 52], [0, 7, 0]),
+  overview: () => v([70, 120, 560], [0, 10, -220]),
+  daegye: () => v([8.5, -5.8, 94], [8.5, 0.5, 69.5]),
+  east: () => v([-60, 6, 40], [200, 30, 10]),
+  moon: () => v([-120, 14, 120], [200, 40, 60]),
+  south: () => v([18, 1.6, 69], [170, -8.1, 520]),
+  songak: () => v([60, 130, -900], [-10, 0, -40]),
+  roofClose: () => v([28, 16, 30], [4, 10, 2]),
+};
+window.__time = (name) => { env.setTime(name, { instant: true }); render(); };
+const bar = document.getElementById('bar');
+for (const p of env.presets) {
+  const b = document.createElement('button'); b.textContent = p.name;
+  b.onclick = () => { env.setTime(p.name); const loop = () => { const busy = env.update(0.016, cam, ctl.target); renderer.render(scene, cam); if (busy) requestAnimationFrame(loop); else render(); }; loop(); };
+  bar.appendChild(b);
+}
+for (const k of Object.keys(window.__views)) {
+  const b = document.createElement('button'); b.textContent = k; b.onclick = window.__views[k]; bar.appendChild(b);
+}
+addEventListener('resize', () => { renderer.setSize(innerWidth, innerHeight); cam.aspect = innerWidth / innerHeight; cam.updateProjectionMatrix(); render(); });
+window.__views[params.get('view') || 'hero']();
+window.__ready = true;
+</script>
+</body>
+</html>

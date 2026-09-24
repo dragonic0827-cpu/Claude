@@ -3,7 +3,9 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
-<title>고려 개경 만월대</title>
+<title>滿月臺 · 고려 개경 만월대 3D 복원</title>
+<meta name="description" content="1123년 송나라 사신 서긍이 본 고려 본궐, 개경 만월대를 발굴 자료와 『고려도경』으로 다시 세운 3D 복원">
+<meta name="theme-color" content="#15191b">
 <script type="importmap">
 {
   "imports": {
@@ -12,16 +14,59 @@
   }
 }
 </script>
-<style>
-  html, body { margin: 0; height: 100%; overflow: hidden; background: #1b1f24; color: #eee; font-family: system-ui, sans-serif; }
-  #app { position: fixed; inset: 0; }
-  #loading { position: fixed; inset: 0; display: grid; place-items: center; background: #1b1f24; transition: opacity .6s; }
-  #loading.done { opacity: 0; pointer-events: none; }
-</style>
+<script>
+  // 글꼴(Google Fonts: Song Myung · Gowun Dodum). 자동화 도구로 여는 점검에서는 외부 요청을 건너뜁니다(?fonts=1 로 강제).
+  (function () {
+    if (navigator.webdriver && !/[?&]fonts=1/.test(location.search)) return;
+    var d = document, head = d.head;
+    var add = function (rel, href, cors) {
+      var l = d.createElement('link');
+      l.rel = rel; l.href = href;
+      if (cors) l.crossOrigin = '';
+      head.appendChild(l);
+    };
+    add('preconnect', 'https://fonts.googleapis.com');
+    add('preconnect', 'https://fonts.gstatic.com', true);
+    add('stylesheet', 'https://fonts.googleapis.com/css2?family=Gowun+Dodum&family=Song+Myung&display=swap');
+  })();
+</script>
+<link rel="stylesheet" href="./css/style.css">
 </head>
 <body>
 <div id="app"></div>
-<div id="loading"><div id="loading-msg">불러오는 중…</div></div>
+<div id="labels" class="labels" aria-hidden="true"></div>
+<div id="ui" class="ui">
+  <header class="brand">
+    <h1 class="brand-title"><span lang="zh-Hant">滿月臺</span><span class="sr-only"> 만월대</span></h1>
+    <p class="brand-sub">고려 개경 본궐 <span class="brand-year">1123</span></p>
+  </header>
+  <div class="status" id="status">
+    <div id="ruins-note" class="note" hidden>
+      <b>유적 보기</b>
+      <span>목조 건물을 걷어 낸 오늘의 모습입니다. 1361년 홍건적의 침입으로 불탄 뒤 궁궐은 다시 세워지지 않았고, 축대와 계단, 초석만 남았습니다.</span>
+    </div>
+    <div id="toast" class="toast" role="status" aria-live="polite" hidden></div>
+  </div>
+</div>
+<div id="sr-live" class="sr-only" aria-live="polite"></div>
+<div id="loading" class="loading">
+  <div class="loading-moon" aria-hidden="true"></div>
+  <svg class="loading-ridge" viewBox="0 0 1200 220" preserveAspectRatio="xMidYMax slice" aria-hidden="true">
+    <path d="M0 170 C120 150 190 118 280 124 S420 150 520 104 S640 30 700 22 S800 70 880 96 S1040 120 1200 110 V220 H0Z" fill="#1a2023"/>
+    <path d="M0 196 C160 180 260 166 380 172 S560 190 700 170 S900 150 1020 162 S1140 176 1200 170 V220 H0Z" fill="#131719"/>
+  </svg>
+  <div class="loading-inner">
+    <p class="loading-title" lang="zh-Hant" aria-hidden="true"><span>滿</span><span>月</span><span>臺</span></p>
+    <div class="loading-text">
+      <p class="loading-eyebrow">고려 본궐 3D 복원</p>
+      <h2 class="loading-name">개경 만월대</h2>
+      <p class="loading-sub">1123년, 송나라 사신 서긍이 본 궁궐을 발굴 자료와 『고려도경』으로 다시 세웁니다.</p>
+      <div class="loading-track" role="progressbar" aria-label="불러오기" aria-valuemin="0" aria-valuemax="100" aria-valuenow="0"><i id="loading-bar"></i></div>
+      <p id="loading-msg" class="loading-msg" aria-live="polite">불러오는 중…</p>
+    </div>
+  </div>
+</div>
+<noscript><p class="noscript">이 3D 복원은 자바스크립트와 WebGL 이 필요합니다.</p></noscript>
 <script type="module" src="./src/main.js"></script>
 </body>
 </html>

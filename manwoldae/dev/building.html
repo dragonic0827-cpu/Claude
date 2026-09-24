@@ -1,0 +1,210 @@
+<!doctype html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>전각 확인</title>
+<script type="importmap">{"imports":{"three":"https://cdn.jsdelivr.net/npm/three@0.170.0/build/three.module.js","three/addons/":"https://cdn.jsdelivr.net/npm/three@0.170.0/examples/jsm/"}}</script>
+<style>
+  html, body { margin: 0; height: 100%; background: #9fc0da; overflow: hidden; font: 13px/1.4 system-ui, sans-serif; }
+  canvas { display: block; }
+  #hud { position: fixed; left: 8px; top: 8px; background: rgba(20, 24, 28, 0.62); color: #f3efe6; padding: 6px 9px; border-radius: 6px; white-space: pre; pointer-events: none; }
+</style>
+</head>
+<body>
+<div id="hud">전각을 세우는 중…</div>
+<script type="module">
+import * as THREE from 'three';
+import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
+import { RoomEnvironment } from 'three/addons/environments/RoomEnvironment.js';
+import spec from '../src/data/spec.js';
+import { createMaterials } from '../src/core/materials.js';
+import { createBuilding } from '../src/arch/building.js';
+
+const params = new URLSearchParams(location.search);
+const renderer = new THREE.WebGLRenderer({ antialias: true });
+renderer.setPixelRatio(Math.min(devicePixelRatio, 2));
+renderer.setSize(innerWidth, innerHeight);
+renderer.outputColorSpace = THREE.SRGBColorSpace;
+renderer.toneMapping = THREE.ACESFilmicToneMapping;
+renderer.toneMappingExposure = 1.0;
+renderer.shadowMap.enabled = true;
+renderer.shadowMap.type = THREE.PCFSoftShadowMap;
+document.body.appendChild(renderer.domElement);
+
+const scene = new THREE.Scene();
+scene.background = new THREE.Color('#9fc0da');
+scene.fog = new THREE.Fog('#b4cbdc', 260, 900);
+const pmrem = new THREE.PMREMGenerator(renderer);
+scene.environment = pmrem.fromScene(new RoomEnvironment(), 0.04).texture;
+scene.environmentIntensity = 0.12;
+
+const cam = new THREE.PerspectiveCamera(40, innerWidth / innerHeight, 0.3, 2000);
+const ctl = new OrbitControls(cam, renderer.domElement);
+ctl.maxPolarAngle = Math.PI * 0.95;
+
+// 빛: 하늘/땅 반사광 + 늦가을 오전 해
+const hemi = new THREE.HemisphereLight(0xcfe0ee, 0x806c56, 0.9);
+scene.add(hemi);
+const sun = new THREE.DirectionalLight(0xfff0d8, 3.1);
+sun.castShadow = true;
+sun.shadow.mapSize.set(4096, 4096);
+sun.shadow.bias = -0.0004;
+sun.shadow.normalBias = 0.04;
+sun.shadow.radius = 3;
+scene.add(sun, sun.target);
+const sunDir = new THREE.Vector3(-0.42, 0.62, 0.66).normalize();
+function fitShadow(center, radius) {
+  sun.target.position.copy(center);
+  sun.position.copy(center).addScaledVector(sunDir, radius * 2 + 40);
+  const c = sun.shadow.camera;
+  c.left = c.bottom = -radius; c.right = c.top = radius;
+  c.near = 1; c.far = radius * 4 + 80;
+  c.updateProjectionMatrix();
+  sun.shadow.needsUpdate = true;
+}
+
+const mats = createMaterials(spec.palette);
+// 땅
+const ground = new THREE.Mesh(new THREE.PlaneGeometry(1200, 1200).rotateX(-Math.PI / 2), new THREE.MeshStandardMaterial({ color: spec.palette.packedEarth, roughness: 1 }));
+ground.receiveShadow = true;
+scene.add(ground);
+
+const byId = Object.fromEntries(spec.buildings.map((b) => [b.id, b]));
+// 줄 세우기: [id, x, z, (회전 덮어쓰기)]
+const lineup = [
+  ['hoegyeongjeon', 0, 0],
+  ['changhapmun', -45, 2],
+  ['seungpyeongmun', 44, 4],
+  ['janghwa_seomu', 71, 2],
+  ['geumwon_jeongja', 88, 2],
+  ['wondeokjeonmun', -70, 4],
+  ['gyeong_gate', -86, 4],
+  ['sinbongmun', 0, -48],
+  ['hoegyeongjeonmun', -42, -44],
+  ['w8_1', 52, -44],
+  ['w6_2', -80, -44],
+  ['gwan_w', 96, -44],
+  ['gyeongnyeongjeon', -118, -46],
+  ['gyeong_18', 124, -44],
+];
+// 경계 사례 (spec 에 없는 가상 정의): 깊은 평면·1칸 문·1칸 정자·2층 3×1 누문
+const fuzz = {
+  deep_hip: { id: 'deep_hip', kind: 'hall', baysFront: 2, baysSide: 4, bayWidth: 3, bayDepth: 3.2, roof: 'hip', rank: 2, platformHeight: 0.6 },
+  deep_hg: { id: 'deep_hg', kind: 'hall', bayWidthsFront: [3, 3], bayWidthsSide: [3, 3, 3], roof: 'hip-gable', rank: 3, columnHeight: 3.4 },
+  gate1: { id: 'gate1', kind: 'gate', baysFront: 1, baysSide: 1, bayWidth: 3, bayDepth: 2.5, roof: 'gable', rank: 4, doors: 1 },
+  gh1: { id: 'gh1', kind: 'gatehouse', stories: 2, baysFront: 3, baysSide: 1, bayWidth: 4, bayDepth: 4, roof: 'hip-gable', rank: 2 },
+  pav1: { id: 'pav1', kind: 'pavilion', baysFront: 1, baysSide: 1, bayWidth: 3, bayDepth: 3, roof: 'hip', rank: 4 },
+};
+Object.assign(byId, fuzz);
+const all = params.get('set') === 'all';
+const list = all
+  ? spec.buildings.map((b, i) => [b.id, (i % 9) * 62 - 250, Math.floor(i / 9) * 45 - 90])
+  : params.get('set') === 'fuzz' ? Object.keys(fuzz).map((id, i) => [id, i * 24 - 48, 0]) : lineup;
+const hi = [], lo = [], md = [];
+const t0 = performance.now();
+const counts = {};
+for (const [id, x, z] of list) {
+  const def = { ...byId[id], cx: x, cz: z, groundY: 0 };
+  const g = createBuilding(def, mats, { celadon: id === 'geumwon_jeongja', dapo: params.get('dapo') === '1' });
+  scene.add(g); hi.push(g);
+  counts[id] = { high: g.userData.triangles };
+  if (!all) {
+    const l = createBuilding({ ...def, cz: z + 120 }, mats, { detail: 'low', celadon: id === 'geumwon_jeongja' });
+    scene.add(l); lo.push(l);
+    const m = createBuilding({ ...def, cz: z + 240 }, mats, { detail: 'medium', celadon: id === 'geumwon_jeongja' });
+    scene.add(m); md.push(m);
+    counts[id].low = l.userData.triangles;
+    counts[id].medium = m.userData.triangles;
+    counts[id].meshes = g.children.reduce((n, c) => n + c.children.length, 0);
+    counts[id].meshesLow = l.children.reduce((n, c) => n + c.children.length, 0);
+    counts[id].warn = g.userData.warnings;
+  }
+}
+const buildMs = performance.now() - t0;
+
+let ruins = false;
+function setRuins(on) {
+  ruins = on;
+  for (const g of [...hi, ...lo, ...md]) g.traverse((o) => { if (o.name === 'superstructure') o.visible = !on; });
+}
+// 'low' | 'medium' | true(둘 다) | false
+function showLow(on) {
+  for (const g of lo) g.visible = on === true || on === 'low';
+  for (const g of md) g.visible = on === true || on === 'medium';
+}
+showLow(false);
+
+const hud = document.getElementById('hud');
+function render() {
+  renderer.render(scene, cam);
+  const i = renderer.info.render;
+  hud.textContent = `calls ${i.calls}  tris ${i.triangles.toLocaleString()}  build ${buildMs.toFixed(0)} ms`;
+}
+ctl.addEventListener('change', render);
+addEventListener('resize', () => {
+  cam.aspect = innerWidth / innerHeight; cam.updateProjectionMatrix();
+  renderer.setSize(innerWidth, innerHeight); render();
+});
+
+const v = (p, t, fov = 40) => {
+  cam.fov = fov; cam.updateProjectionMatrix();
+  cam.position.set(...p); ctl.target.set(...t); ctl.update();
+};
+const views = {
+  overview: () => { setRuins(false); showLow(false); fitShadow(new THREE.Vector3(0, 0, -20), 130); v([40, 95, 150], [0, 0, -20], 45); },
+  hoegyeong_front: () => { setRuins(false); showLow(false); fitShadow(new THREE.Vector3(0, 0, 0), 40); v([0, 6, 62], [0, 8.5, 0], 40); },
+  hoegyeong_corner: () => { setRuins(false); showLow(false); fitShadow(new THREE.Vector3(18, 0, 8), 30); v([29, 3.2, 19.5], [21.8, 8.0, 10.5], 55); },
+  hoegyeong_bracket: () => { setRuins(false); showLow(false); fitShadow(new THREE.Vector3(0, 0, 8), 25); v([3.5, 4.2, 16.5], [1.2, 7.4, 8.2], 45); },
+  hoegyeong_roof: () => { setRuins(false); showLow(false); fitShadow(new THREE.Vector3(0, 0, 0), 40); v([-38, 28, 30], [-8, 10, 0], 40); },
+  gatehouse: () => { setRuins(false); showLow(false); fitShadow(new THREE.Vector3(44, 0, 4), 30); v([66, 7, 36], [44, 7, 4], 42); },
+  sinbong: () => { setRuins(false); showLow(false); fitShadow(new THREE.Vector3(0, 0, -48), 35); v([-24, 7, -18], [0, 8, -48], 45); },
+  eave_below: () => { setRuins(false); showLow(false); fitShadow(new THREE.Vector3(0, 0, 8), 25); v([6.5, 2.2, 15.5], [5, 8.4, 9.6], 55); },
+  pavilion: () => { setRuins(false); showLow(false); fitShadow(new THREE.Vector3(88, 0, 2), 18); v([96, 4.5, 16], [88, 3.6, 2], 45); },
+  small_gates: () => { setRuins(false); showLow(false); fitShadow(new THREE.Vector3(-78, 0, 4), 22); v([-66, 5, 22], [-78, 3.5, 4], 45); },
+  side_hall: () => { setRuins(false); showLow(false); fitShadow(new THREE.Vector3(71, 0, 2), 20); v([58, 6, 18], [71, 4, 2], 45); },
+  gate: () => { setRuins(false); showLow(false); fitShadow(new THREE.Vector3(-45, 0, 2), 25); v([-30, 4, 24], [-45, 5, 2], 45); },
+  halberds: () => { setRuins(false); showLow(false); fitShadow(new THREE.Vector3(-42, 0, -44), 22); v([-34, 3, -26], [-42, 4, -44], 45); },
+  annex: () => { setRuins(false); showLow(false); fitShadow(new THREE.Vector3(-80, 0, -44), 22); v([-64, 9, -24], [-80, 3, -44], 45); },
+  long_hall: () => { setRuins(false); showLow(false); fitShadow(new THREE.Vector3(52, 0, -44), 40); v([62, 10, -12], [52, 3, -44], 45); },
+  corner_close: () => { setRuins(false); showLow(false); fitShadow(new THREE.Vector3(22, 0, 11), 14); v([29, 6.2, 18.5], [23.2, 8.6, 12.4], 45); },
+  chimi: () => { setRuins(false); showLow(false); fitShadow(new THREE.Vector3(16, 10, 0), 14); v([24, 16.5, 14], [16.3, 15.6, 0], 40); },
+  pav_corner: () => { setRuins(false); showLow(false); fitShadow(new THREE.Vector3(88, 0, 2), 12); v([94.5, 4.4, 9.5], [92.2, 3.6, 6.4], 40); },
+  hero: () => { setRuins(false); showLow(false); fitShadow(new THREE.Vector3(0, 0, 0), 45); v([-38, 3.5, 52], [2, 8, 0], 42); },
+  back: () => { setRuins(false); showLow(false); fitShadow(new THREE.Vector3(0, 0, 0), 45); v([22, 4, -46], [0, 6, 0], 45); },
+  medium_lod: () => { setRuins(false); showLow('medium'); fitShadow(new THREE.Vector3(0, 0, 240), 60); v([-20, 12, 300], [0, 6, 240], 42); },
+  medium_vs_high: () => { setRuins(false); showLow(true); fitShadow(new THREE.Vector3(0, 0, 120), 150); v([60, 30, 330], [0, 4, 130], 42); },
+  hapgak: () => { setRuins(false); showLow(false); fitShadow(new THREE.Vector3(-16, 8, 5), 16); v([-27, 13.5, 17], [-17.5, 11, 5.5], 40); },
+  corner_bracket: () => { setRuins(false); showLow(false); fitShadow(new THREE.Vector3(19, 5, 8), 10); v([17.2, 4.2, 11.6], [19.6, 7.4, 8.4], 60); },
+  hwalju: () => { setRuins(false); showLow(false); fitShadow(new THREE.Vector3(-45, 2, 2), 16); v([-26, 2.5, 12], [-34, 5, 5], 55); },
+  shrine: () => { setRuins(false); showLow(false); fitShadow(new THREE.Vector3(-118, 0, -46), 22); v([-100, 6, -20], [-118, 5, -46], 45); },
+  fuzz: () => { setRuins(false); showLow(false); fitShadow(new THREE.Vector3(0, 0, 0), 70); v([30, 30, 62], [0, 3, 0], 45); },
+  low_lod: () => { setRuins(false); showLow('low'); fitShadow(new THREE.Vector3(0, 0, 120), 110); v([10, 45, 230], [0, 4, 120], 45); },
+  ruins: () => { setRuins(true); showLow(false); fitShadow(new THREE.Vector3(0, 0, -20), 130); v([40, 70, 120], [0, 0, -10], 45); },
+  all: () => { setRuins(false); showLow(false); fitShadow(new THREE.Vector3(0, 0, 0), 300); v([0, 260, 420], [0, 0, 0], 45); },
+};
+// 건물 하나를 3/4 정면에서 (set=all 에서 번호로)
+views.frame = (i) => {
+  const g = hi[i];
+  const box = new THREE.Box3().setFromObject(g);
+  const c = box.getCenter(new THREE.Vector3()), sz = box.getSize(new THREE.Vector3());
+  const r = Math.max(sz.x, sz.z) * 0.62 + 4;
+  const rot = g.rotation.y;
+  const dir = new THREE.Vector3(Math.sin(rot) * 0.8 + Math.cos(rot) * 0.55, 0, Math.cos(rot) * 0.8 - Math.sin(rot) * 0.55).normalize();
+  fitShadow(c, r + 10);
+  setRuins(false); showLow(false);
+  v([c.x + dir.x * r * 1.9, c.y + r * 0.45, c.z + dir.z * r * 1.9], [c.x, c.y - sz.y * 0.1, c.z], 40);
+  return hi[i].name;
+};
+for (const k of Object.keys(views)) {
+  const f = views[k];
+  views[k] = (...a) => { const r = f(...a); render(); return r; };
+}
+window.__views = views;
+window.__dbg = { scene, sun, hemi, renderer };
+window.__info = () => ({ ...renderer.info.render, buildMs: Math.round(buildMs), counts });
+(all ? views.all : views.overview)();
+window.__ready = true;
+</script>
+</body>
+</html>

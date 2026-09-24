@@ -1,62 +1,15 @@
-// [임시 스텁] 계단·회랑·담장·기념물 — 곧 실제 구현으로 교체됩니다.
-import * as THREE from 'three';
-
-export function createStairs(def, mats) {
-  const h = def.topY - def.bottomY;
-  const m = new THREE.Mesh(new THREE.BoxGeometry(def.width, h, def.run), mats.stoneTop);
-  m.position.set(def.cx, def.bottomY + h / 2, def.cz);
-  m.rotation.y = -THREE.MathUtils.degToRad(def.rotationDeg || 0);
-  m.castShadow = m.receiveShadow = true;
-  return m;
-}
-
-export function createCorridor(def, mats) {
-  const g = new THREE.Group();
-  const pts = def.path.map(([x, z]) => new THREE.Vector3(x, def.groundY ?? 0, z));
-  if (def.closed) pts.push(pts[0].clone());
-  for (let i = 0; i < pts.length - 1; i++) {
-    const a = pts[i], b = pts[i + 1];
-    const len = a.distanceTo(b);
-    const m = new THREE.Mesh(new THREE.BoxGeometry(def.width, 4, len), mats.plasterPlain);
-    m.position.copy(a).lerp(b, 0.5); m.position.y += 2;
-    m.lookAt(b.x, m.position.y, b.z);
-    m.castShadow = m.receiveShadow = true;
-    g.add(m);
-  }
-  return g;
-}
-
-export function createWall(def, mats, heightAt) {
-  const g = new THREE.Group();
-  const pts = def.path.map(([x, z]) => new THREE.Vector3(x, 0, z));
-  if (def.closed) pts.push(pts[0].clone());
-  for (let i = 0; i < pts.length - 1; i++) {
-    const a = pts[i], b = pts[i + 1];
-    const len = a.distanceTo(b);
-    const mid = a.clone().lerp(b, 0.5);
-    const y = def.groundY ?? heightAt(mid.x, mid.z);
-    const m = new THREE.Mesh(new THREE.BoxGeometry(def.thickness, def.height, len), mats.stoneRubble);
-    m.position.set(mid.x, y + def.height / 2, mid.z);
-    m.lookAt(b.x, m.position.y, b.z);
-    m.castShadow = m.receiveShadow = true;
-    g.add(m);
-  }
-  return g;
-}
-
-export function createLandmark(def, mats, heightAt) {
-  const m = new THREE.Mesh(new THREE.CylinderGeometry(1, 1, 3, 8), mats.stone);
-  const y = def.y ?? heightAt(def.x, def.z);
-  m.position.set(def.x, y + 1.5, def.z);
-  m.userData.pickId = def.id;
-  return m;
-}
-
-export function createBridge(def, mats) {
-  const m = new THREE.Mesh(new THREE.BoxGeometry(def.width, 0.6, def.length), mats.stoneTop);
-  m.position.set(def.cx, def.deckY - 0.3, def.cz);
-  m.rotation.y = -THREE.MathUtils.degToRad(def.rotationDeg || 0);
-  m.castShadow = m.receiveShadow = true;
-  m.userData.pickId = def.id;
-  return m;
-}
+// 계단·다리·회랑·담장·기념물 — 월드 좌표에 이미 배치된 Object3D 를 돌려줍니다.
+//
+//   createStairs(def, mats)                      spec.stairs[]    디딤돌·소맷돌·지대석(+ 회경전·건덕전 계단 주칠 목난간)
+//   createBridge(def, mats, opts?)               spec.bridges[]   opts.streams(spec.terrain.streams)로 방향·수면 확인
+//   createCorridor(def, mats, heightAt, ctx?)    spec.corridors[] ctx = { buildings, terraces, corridors, stairs }
+//   createWall(def, mats, heightAt, ctx?)        spec.walls[]     ctx = { buildings } (문 기단에서 끊음)
+//   createLandmark(def, mats, heightAt)          spec.landmarks[] userData = { id, nameKo, labelY }
+//
+//   mergeElements(objects, name?) → Group      (선택) 정적 요소를 재질별 메시 하나로 합침. pickIdAt(mesh, faceIndex)
+//
+// 메시마다 castShadow/receiveShadow 와 userData.pickId = def.id 가 들어 있습니다.
+export { createStairs, createBridge, createLandmark } from './elements-stairs.js';
+export { createCorridor } from './elements-corridor.js';
+export { createWall } from './elements-wall.js';
+export { mergeElements, pickIdAt } from './elements-geo.js';

@@ -4,52 +4,104 @@
 <meta charset="utf-8">
 <title>지붕 확인</title>
 <script type="importmap">{"imports":{"three":"https://cdn.jsdelivr.net/npm/three@0.170.0/build/three.module.js","three/addons/":"https://cdn.jsdelivr.net/npm/three@0.170.0/examples/jsm/"}}</script>
-<style>html,body{margin:0;height:100%;background:#222}canvas{display:block}</style>
+<style>html,body{margin:0;height:100%;background:#9fc0da;overflow:hidden}canvas{display:block}</style>
 </head>
 <body>
 <script type="module">
+// 지붕 형태 확인: 팔작 · 우진각 · 사모 · 맞배 (RoofShape + buildRoof, 서까래·부연·막새·치미·화주 포함)
 import * as THREE from 'three';
 import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
 import { createMaterials } from '../src/core/materials.js';
-import { RoofShape, buildRoofSurfaces, ridgeLines, ridgeTube } from '../src/arch/roof.js';
+import { GeoSink } from '../src/arch/building-geo.js';
+import { RoofShape, buildRoof } from '../src/arch/roof.js';
+import spec from '../src/data/spec.js';
+
 const renderer = new THREE.WebGLRenderer({ antialias: true });
 renderer.setSize(innerWidth, innerHeight);
+renderer.outputColorSpace = THREE.SRGBColorSpace;
 renderer.toneMapping = THREE.ACESFilmicToneMapping;
+renderer.shadowMap.enabled = true;
+renderer.shadowMap.type = THREE.PCFSoftShadowMap;
 document.body.appendChild(renderer.domElement);
 const scene = new THREE.Scene();
-scene.background = new THREE.Color('#9fb6c8');
+scene.background = new THREE.Color('#9fc0da');
 const cam = new THREE.PerspectiveCamera(40, innerWidth / innerHeight, 0.1, 500);
-cam.position.set(20, 22, 48);
-const ctl = new OrbitControls(cam, renderer.domElement); ctl.target.set(0, 3, 0); ctl.update();
-scene.add(new THREE.HemisphereLight(0xffffff, 0x445544, 1.3));
-const sun = new THREE.DirectionalLight(0xffffff, 2.2); sun.position.set(20, 30, 25); scene.add(sun);
-scene.add(new THREE.GridHelper(80, 40, 0x444444, 0x666666));
-const m = createMaterials();
-function roof(type, a, b, H, x, tileMat) {
-  const shape = new RoofShape({ type, halfWidth: a, halfDepth: b, height: H });
-  const s = buildRoofSurfaces(shape);
-  const g = new THREE.Group();
-  for (const geo of s.top) g.add(new THREE.Mesh(geo, tileMat));
-  for (const geo of s.under) g.add(new THREE.Mesh(geo, m.roofUnder));
-  for (const geo of s.edge) g.add(new THREE.Mesh(geo, m.ridgeGray));
-  for (const geo of s.gable) g.add(new THREE.Mesh(geo, m.woodRed));
-  for (const l of ridgeLines(shape)) {
-    const lifted = l.pts.map(p => p.clone().add(new THREE.Vector3(0, 0.2, 0)));
-    g.add(new THREE.Mesh(ridgeTube(lifted, l.kind === 'main' ? 0.7 : 0.45, l.kind === 'main' ? 0.9 : 0.5), m.ridgeGray));
-  }
-  g.position.set(x, 2, 0);
-  scene.add(g);
-}
-roof('hip-gable', 12, 7, 4.6, -14, m.tileCeladon);
-roof('hip', 6, 4.5, 3.2, 8, m.tileGray);
-roof('gable', 5, 4, 2.8, 22, m.tileGray);
-window.__views = {
-  front: () => { cam.position.set(0, 8, 45); ctl.target.set(0, 4, 0); ctl.update(); },
-  side: () => { cam.position.set(50, 6, 0); ctl.target.set(0, 4, 0); ctl.update(); },
-  top: () => { cam.position.set(0, 60, 1); ctl.target.set(0, 0, 0); ctl.update(); },
-  below: () => { cam.position.set(-14, 0.5, 14); ctl.target.set(-14, 6, 0); ctl.update(); },
+const ctl = new OrbitControls(cam, renderer.domElement);
+scene.add(new THREE.HemisphereLight(0xcfe0ee, 0x806c56, 0.9));
+const sun = new THREE.DirectionalLight(0xfff0d8, 3.0);
+sun.position.set(-30, 45, 40); sun.castShadow = true;
+sun.shadow.mapSize.set(2048, 2048);
+Object.assign(sun.shadow.camera, { left: -45, right: 45, top: 45, bottom: -45, near: 1, far: 160 });
+sun.shadow.bias = -0.0004; sun.shadow.normalBias = 0.03;
+scene.add(sun);
+const ground = new THREE.Mesh(new THREE.PlaneGeometry(300, 300).rotateX(-Math.PI / 2), new THREE.MeshStandardMaterial({ color: '#a68b69', roughness: 1 }));
+ground.receiveShadow = true;
+scene.add(ground);
+
+const m = createMaterials(spec.palette);
+const P = spec.palette;
+const col = (h, k = 1) => new THREE.Color(h).multiplyScalar(k);
+const C = {
+  timber: col(P.timberRed), timberDark: col(P.timberRed, 0.6), hwangdan: col(P.hwangdan), white: col(P.baekbun),
+  ridge: col(P.roofTileShadow), ridgeDark: col(P.roofTileShadow, 0.7), eave: col(P.roofTile, 0.85), eaveLight: col(P.roofTileHighlight), chimi: col(P.roofTile, 0.95),
 };
-renderer.setAnimationLoop(() => renderer.render(scene, cam));
+const painted = new THREE.MeshStandardMaterial({ vertexColors: true, roughness: 0.72 });
+const trim = new THREE.MeshStandardMaterial({ vertexColors: true, roughness: 0.8 });
+const matFor = (k) => ({ tile: m.tileGray, under: m.roofUnder, trim, painted, plank: m.doorPlank, rafterEnd: m.rafterEnd, gilt: m.gilt }[k] || m.timber);
+
+// 기둥선 반폭 hx × hz, 처마 내밀기 ov 로 지붕 하나 (building.js 와 같은 물매 규칙)
+function roof(type, hx, hz, ov, x, z, extra = {}) {
+  const tc = ov, s0 = 0.26;
+  const Hroof = (tc * (s0 + 0.5)) / 2 + 0.31 * 2 * hz;
+  const W = 2 * hx;
+  const a = hx + (type === 'gable' ? 0.42 * ov : ov), b = hz + ov;
+  const hipIn = Math.min(extra.bayEnd ?? hz * 0.5, 0.6 * hz);
+  const proj = 0.25 * hipIn;
+  const shape = new RoofShape({
+    type, halfWidth: a, halfDepth: b, height: Hroof, profile: { tc, s0, sc: 0.5 },
+    cornerLift: Math.min(0.025 * W, 1), cornerFlare: Math.min(0.018 * W, 0.7), sweepLength: (2 * a) / 3, liftDepth: tc * 1.1,
+    hipDepth: ov + hipIn - proj, gableProjection: proj,
+  });
+  const rR = 0.09, te = 0.19, bS = 1.5 * rR, tO = 0.27 * ov;
+  const T = (t) => te + bS * Math.min(1, Math.max(0, (t - (tO - 0.04)) / 0.08));
+  const sink = new GeoSink(['painted', 'trim']);
+  const Rh = Math.max(0.26, 0.05 * 2 * hz);
+  const info = buildRoof(shape, sink, {
+    detail: 'high', C, te, T, ridge: { h: Rh, w: 0.5 * Rh + 0.14 }, hip: { h: 0.44 * Rh, w: 0.33 * Rh + 0.1 },
+    chimi: extra.chimi ?? 0, finialTop: extra.finial ?? 0, finialCorners: extra.corners ?? 0, gableWall: true, gableOrnament: true,
+    barge: { t: 0.08, h: 0.35 }, makseSegs: 8, ridgeFull: true,
+    eave: { double: true, tO, tB0: 0.05, tIn: ov + 0.35, rR, sp: 0.33, bS, hx, hz, segs: 8, cw: 2.6 * rR, ch: 3 * rR, gilt: true },
+  });
+  const g = sink.build('roof', matFor, type);
+  g.position.set(x, 4, z);
+  scene.add(g);
+  // 기둥선 표시용 받침
+  const box = new THREE.Mesh(new THREE.BoxGeometry(2 * hx, 4, 2 * hz), new THREE.MeshStandardMaterial({ color: P.plasterWall }));
+  box.position.set(x, 2 - 0.3, z); box.castShadow = box.receiveShadow = true;
+  scene.add(box);
+  g.traverse((o) => { if (o.isMesh) o.castShadow = o.receiveShadow = true; });
+  return { shape, info, tris: sink.triangles() };
+}
+const stats = [
+  roof('hip-gable', 9, 4.2, 3.0, -16, 0, { chimi: 1.6, bayEnd: 3.2 }),
+  roof('hip', 6, 3.6, 2.6, 10, 0, { corners: 0.5, chimi: 1.0 }),
+  roof('hip', 3.6, 3.6, 2.2, 26, 0, { finial: 1.0 }),
+  roof('gable', 5, 3.4, 2.4, 10, -18),
+];
+
+const render = () => renderer.render(scene, cam);
+ctl.addEventListener('change', render);
+const v = (p, t) => { cam.position.set(...p); ctl.target.set(...t); ctl.update(); render(); };
+window.__views = {
+  front: () => v([4, 8, 40], [4, 6, 0]),
+  side: () => v([48, 6, 2], [4, 6, 0]),
+  top: () => v([4, 60, 12], [4, 0, 0]),
+  below: () => v([-16, 1.5, 10], [-16, 6, 3]),
+  corner: () => v([-2, 5, 10], [-7, 6.5, 4.5]),
+  gable: () => v([22, 7, -4], [10, 6, -18]),
+};
+window.__info = () => stats.map((s) => ({ type: s.shape.type, tris: s.tris, ridgeTop: +s.info.ridgeTop.toFixed(2) }));
+window.__views.front();
 window.__ready = true;
 </script>
 </body>

@@ -8,6 +8,7 @@
 //   --shot <name.png>  준비 완료 후 한 장 촬영
 //   --steps <json>     [{ "eval": "JS 식", "wait": ms, "shot": "a.png" }, ...] 순서대로 실행
 //   --timeout <ms>     window.__ready 대기 시간 (기본 120000)
+//   --mobile           휴대폰 흉내 (터치·coarse 포인터·모바일 UA → 앱의 휴대폰 경로)
 //
 // 페이지는 준비가 끝나면 window.__ready = true 를 설정해야 합니다.
 // 콘솔 error / pageerror / 요청 실패가 있으면 출력하고 종료 코드 1 을 반환합니다.
@@ -49,7 +50,14 @@ const base = `http://127.0.0.1:${server.address().port}/`;
 const browser = await chromium.launch({
   args: ['--use-gl=angle', '--use-angle=swiftshader', '--enable-unsafe-swiftshader', '--ignore-gpu-blocklist'],
 });
-const ctx = await browser.newContext({ viewport: { width: vw, height: vh }, deviceScaleFactor: 1 });
+const mobile = argv.includes('--mobile');
+const ctx = await browser.newContext({
+  viewport: { width: vw, height: vh }, deviceScaleFactor: 1,
+  ...(mobile ? {
+    isMobile: true, hasTouch: true,
+    userAgent: 'Mozilla/5.0 (iPhone; CPU iPhone OS 17_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.0 Mobile/15E148 Safari/604.1',
+  } : {}),
+});
 const p = await ctx.newPage();
 const threeDir = path.join(ROOT, 'node_modules', 'three');
 if (fs.existsSync(threeDir)) {
@@ -87,7 +95,7 @@ for (const s of steps) {
   if (s.wait) await p.waitForTimeout(s.wait);
   if (s.shot) {
     const file = path.join(outDir, s.shot);
-    await p.screenshot({ path: file });
+    await p.screenshot({ path: file, timeout: 180000 }); // SwiftShader 는 한 프레임에 수십 초 걸리기도 함
     console.log(`shot: ${path.relative(ROOT, file)}`);
   }
 }

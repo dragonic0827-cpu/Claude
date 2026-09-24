@@ -1,0 +1,162 @@
+<!doctype html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>지형·식생 확인</title>
+<script type="importmap">{"imports":{"three":"https://cdn.jsdelivr.net/npm/three@0.170.0/build/three.module.js","three/addons/":"https://cdn.jsdelivr.net/npm/three@0.170.0/examples/jsm/"}}</script>
+<style>
+html,body{margin:0;height:100%;background:#a9c3d6;overflow:hidden;font:13px/1.4 system-ui,sans-serif}
+canvas{display:block}
+#hud{position:fixed;left:8px;top:8px;background:rgba(20,24,28,.72);color:#eee;padding:6px 9px;border-radius:6px;white-space:pre;pointer-events:none}
+#views{position:fixed;right:8px;top:8px;display:flex;flex-wrap:wrap;gap:4px;max-width:60vw;justify-content:flex-end}
+#views button{font:12px system-ui;padding:3px 7px;border-radius:4px;border:0;background:#2b3440;color:#eee;cursor:pointer}
+</style>
+</head>
+<body>
+<div id="hud">불러오는 중…</div>
+<div id="views"></div>
+<script type="module">
+import * as THREE from 'three';
+import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
+import spec from '../src/data/spec.js';
+import { createMaterials } from '../src/core/materials.js';
+import { createTerrain } from '../src/world/terrain.js';
+import { createVegetation } from '../src/world/vegetation.js';
+
+const params = new URLSearchParams(location.search);
+const renderer = new THREE.WebGLRenderer({ antialias: true });
+renderer.setPixelRatio(Math.min(devicePixelRatio, 2));
+renderer.setSize(innerWidth, innerHeight);
+renderer.outputColorSpace = THREE.SRGBColorSpace;
+renderer.toneMapping = THREE.ACESFilmicToneMapping;
+renderer.toneMappingExposure = 1.0;
+renderer.shadowMap.enabled = true;
+renderer.shadowMap.type = THREE.PCFSoftShadowMap;
+document.body.appendChild(renderer.domElement);
+
+const scene = new THREE.Scene();
+const skyCol = new THREE.Color('#b4c8d8');
+scene.background = skyCol;
+scene.fog = new THREE.Fog(skyCol, 900, 9000);
+const cam = new THREE.PerspectiveCamera(50, innerWidth / innerHeight, 0.5, 12000);
+const ctl = new OrbitControls(cam, renderer.domElement);
+ctl.enableDamping = false;
+
+// 조명: 늦가을 오전 (spec.modelingGuide.lighting — 진방위 A 는 PLAN 에서 A+17°)
+scene.add(new THREE.HemisphereLight(0xdfe7f2, 0x6a5c48, 1.15));
+const sun = new THREE.DirectionalLight(0xfff0dc, 2.6);
+const A = THREE.MathUtils.degToRad(150 + 17), alt = THREE.MathUtils.degToRad(30);
+const sunDir = new THREE.Vector3(Math.sin(A) * Math.cos(alt), Math.sin(alt), -Math.cos(A) * Math.cos(alt));
+sun.castShadow = true;
+sun.shadow.mapSize.set(2048, 2048);
+const sc = sun.shadow.camera;
+sc.left = -330; sc.right = 330; sc.top = 330; sc.bottom = -330; sc.near = 10; sc.far = 1600;
+sun.shadow.bias = -0.0004;
+sun.shadow.normalBias = 0.6;
+const sunTarget = new THREE.Vector3(-10, 0, 0);
+sun.target.position.copy(sunTarget);
+sun.position.copy(sunTarget).addScaledVector(sunDir, 800);
+scene.add(sun, sun.target);
+
+const hud = document.getElementById('hud');
+const t0 = performance.now();
+const mats = createMaterials(spec.palette);
+const terrain = createTerrain(spec, mats);
+scene.add(terrain.group);
+const t1 = performance.now();
+const blocked = () => false;
+const veg = params.has('noveg') ? new THREE.Group() : createVegetation(spec, mats, terrain.heightAt, blocked, { density: Number(params.get('density') || 1) });
+scene.add(veg);
+const t2 = performance.now();
+
+// 맥락: 건물·계단·다리를 반투명 상자로
+if (!params.has('nobox')) {
+  const boxMat = new THREE.MeshStandardMaterial({ color: 0xc9b8a0, transparent: true, opacity: 0.22, roughness: 0.8, depthWrite: false });
+  const stairMat = new THREE.MeshStandardMaterial({ color: 0xb8b2a6, roughness: 0.9 });
+  for (const b of spec.buildings) {
+    const h = (b.columnHeight || 4) * (b.stories || 1) + 4;
+    const g = new THREE.Mesh(new THREE.BoxGeometry(b.platformW || 10, h, b.platformD || 8), boxMat);
+    g.position.set(b.cx, (b.groundY ?? 0) + h / 2, b.cz);
+    g.rotation.y = -THREE.MathUtils.degToRad(b.rotationDeg || 0);
+    scene.add(g);
+  }
+  for (const s of spec.stairs) {
+    const h = s.topY - s.bottomY;
+    const m = new THREE.Mesh(new THREE.BoxGeometry(s.width, h, s.run), stairMat);
+    m.position.set(s.cx, s.bottomY + h / 2, s.cz);
+    m.rotation.y = -THREE.MathUtils.degToRad(s.rotationDeg || 0);
+    m.castShadow = m.receiveShadow = true;
+    scene.add(m);
+  }
+  for (const b of spec.bridges || []) {
+    const m = new THREE.Mesh(new THREE.BoxGeometry(b.width, 0.7, b.length), stairMat);
+    m.position.set(b.cx, b.deckY - 0.35, b.cz);
+    m.castShadow = m.receiveShadow = true;
+    scene.add(m);
+  }
+}
+
+// 필요할 때만 다시 그립니다(헤드리스 SwiftShader 에서 한 장이 오래 걸려서).
+let dirty = true;
+ctl.addEventListener('change', () => { dirty = true; });
+const set = (p, t) => { cam.position.set(...p); ctl.target.set(...t); ctl.update(); dirty = true; };
+const tour0 = spec.tour[0];
+window.__views = {
+  aerial: () => set([tour0.camera.x, tour0.camera.y, tour0.camera.z], [tour0.target.x, tour0.target.y, tour0.target.z]),
+  songak: () => set([4, 1.7, 36], [40, 160, -1500]),
+  daegye: () => set([-14, -7.4 + 1.7, 96], [-14, -3.5, 70]),
+  daegyeHigh: () => set([45, 14, 118], [0, -4, 76]),
+  stream: () => set([14, -9.5 + 1.7, 216], [-12, -11, 203]),
+  streamHigh: () => set([30, 12, 232], [-20, -11, 203]),
+  west: () => set([-20, 30, -80], [-95, 0, -175]),
+  westLow: () => set([-60, -3, -52], [-95, -2, -95]),
+  far: () => set([400, 2600, 3600], [0, 0, -400]),
+  pond: () => set([66, -3, 24], [98, -7, -6]),
+  songakTour: () => { const s = spec.tour.find((t) => t.id === 'songak'); set([s.camera.x, s.camera.y, s.camera.z], [s.target.x, s.target.y, s.target.z]); },
+  gate: () => set([-200, 6, -120], [-229, -5, -163]),
+  gateE: () => set([190, 3, 250], [159, -10, 217]),
+  north: () => set([60, 60, -380], [0, 0, -120]),
+  summit: () => set([500, 520, -1500], [60, 400, -2150]),
+  wallBase: () => set([46, -2.5, 34], [31.5, -3, 18]),
+  daegyeFlank: () => set([50, -4, 96], [31, -5, 76]),
+  westWall: () => set([-150, -2, -40], [-118, -5, -70]),
+  channel: () => set([-120, -4, 96], [-142, -9, 76]),
+  south: () => set([18, 1.6, 69], [170, -8.1, 520]),
+  daegyeBase: () => set([-8, -7.4 + 1.6, 88], [-20, -6.5, 81]),
+  cornerNE: () => set([44, 3, -40], [31.5, -2, -31.5]),
+  westGroup: () => set([-140, 6, -120], [-110, 0, -150]),
+  nwUphill: () => set([-60, 16, -280], [-60, 10, -255]),
+  bandCross: () => set([-160, 2, -10], [-181, -8, -40]),
+};
+const vb = document.getElementById('views');
+for (const k of Object.keys(window.__views)) {
+  const b = document.createElement('button');
+  b.textContent = k;
+  b.onclick = () => window.__views[k]();
+  vb.appendChild(b);
+}
+window.__views[params.get('view') || 'aerial']();
+window.__terrain = terrain; window.__THREE = THREE;
+window.__scene = scene;
+window.__renderer = renderer;
+
+addEventListener('resize', () => {
+  cam.aspect = innerWidth / innerHeight;
+  cam.updateProjectionMatrix();
+  renderer.setSize(innerWidth, innerHeight);
+  dirty = true;
+});
+let frames = 0;
+renderer.setAnimationLoop(() => {
+  if (!dirty) return;
+  dirty = false;
+  renderer.render(scene, cam);
+  const i = renderer.info.render;
+  hud.textContent = `지형 ${Math.round(t1 - t0)} ms · 식생 ${Math.round(t2 - t1)} ms\n호출 ${i.calls} · 삼각형 ${(i.triangles / 1000).toFixed(0)}k`;
+  window.__info = { calls: i.calls, triangles: i.triangles, terrainMs: Math.round(t1 - t0), vegMs: Math.round(t2 - t1), terrain: terrain.info, veg: veg.userData.info };
+  if (++frames === 1) window.__ready = true;
+});
+</script>
+</body>
+</html>
