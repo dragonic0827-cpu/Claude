@@ -1,5 +1,6 @@
 /* 만월대 3D — 먹(墨) 칠 패널 · 비색(翡色) 강조 · 금박 가는 선 · 주칠은 작은 상태 표시에만 */
 :root {
+  color-scheme: dark;
   --ink: #15191b;
   --panel: rgba(21, 25, 27, 0.82);
   --panel-strong: rgba(18, 22, 24, 0.9);
