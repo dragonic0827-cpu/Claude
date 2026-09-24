@@ -13,6 +13,21 @@ const _A = new THREE.Vector3(), _B = new THREE.Vector3(), _C = new THREE.Vector3
 const _u = new THREE.Vector3(), _w = new THREE.Vector3(), _n = new THREE.Vector3(), _q = new THREE.Vector3();
 const _t = new THREE.Vector3(), _s = new THREE.Vector3(), _up = new THREE.Vector3();
 
+// ── 메모리 줄이기: 텍스처 없는 재질은 uv 를 버리고, 0..1 정점색은 Uint8(정규화)로 ──
+const MAP_SLOTS = ['map', 'normalMap', 'bumpMap', 'roughnessMap', 'metalnessMap', 'aoMap', 'alphaMap', 'emissiveMap', 'lightMap', 'displacementMap', 'specularMap'];
+export function materialUsesUV(mat) {
+  return (Array.isArray(mat) ? mat : [mat]).some((m) => m && MAP_SLOTS.some((k) => m[k]));
+}
+// 정점색 배열(0..1) → 정규화 Uint8 속성 (1 을 넘는 값이 있으면 Float32 그대로)
+export function colorAttribute(arr) {
+  let max = 0;
+  for (let i = 0; i < arr.length; i++) if (arr[i] > max) max = arr[i];
+  if (max > 1.001) return new THREE.Float32BufferAttribute(arr, 3);
+  const u = new Uint8Array(arr.length);
+  for (let i = 0; i < arr.length; i++) u[i] = Math.round(Math.min(1, Math.max(0, arr[i])) * 255);
+  return new THREE.BufferAttribute(u, 3, true);
+}
+
 // 상자 면: [이름, 법선, 네 꼭짓점 부호(바깥에서 반시계), u 축, v 축]
 const BOX_FACES = [
   ['+x', [1, 0, 0], [[1, -1, 1], [1, -1, -1], [1, 1, -1], [1, 1, 1]], 2, 1],
@@ -428,14 +443,15 @@ export class GeoSink {
     g.name = name;
     for (const [key, b] of this.buckets) {
       if (!b.idx.length) continue;
+      const mat = matFor(key);
       const geo = new THREE.BufferGeometry();
       geo.setAttribute('position', new THREE.Float32BufferAttribute(b.p, 3));
       geo.setAttribute('normal', new THREE.Float32BufferAttribute(b.n, 3));
-      geo.setAttribute('uv', new THREE.Float32BufferAttribute(b.uv, 2));
-      if (b.c) geo.setAttribute('color', new THREE.Float32BufferAttribute(b.c, 3));
+      if (materialUsesUV(mat)) geo.setAttribute('uv', new THREE.Float32BufferAttribute(b.uv, 2));
+      if (b.c) geo.setAttribute('color', colorAttribute(b.c));
       geo.setIndex(b.idx);
       geo.computeBoundingSphere();
-      const mesh = new THREE.Mesh(geo, matFor(key));
+      const mesh = new THREE.Mesh(geo, mat);
       mesh.name = `${name}:${key}`;
       mesh.castShadow = mesh.receiveShadow = true;
       mesh.userData.pickId = pickId;

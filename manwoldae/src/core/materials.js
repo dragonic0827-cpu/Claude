@@ -65,7 +65,9 @@ export function createMaterials(palette = {}) {
     timber: std({ color: P.timberRed, roughness: 0.75 }),                                      // 공포·도리·서까래 몸
     bracketUnder: std({ color: P.hwangdan, roughness: 0.75 }),                                  // 공포·첨차 밑면
     whiteLine: std({ color: P.baekbun, roughness: 0.8 }),                                       // 백분 선·백도
-    rafterEnd: std({ map: rafterEndTexture({ green: P.yangrok, red: P.lacquerRed, blue: P.gunCheong, yellow: P.seokhwang, white: P.baekbun }), color: 0xffffff, roughness: 0.8 }),
+    // 서까래·부연 마구리: 12세기 기본은 석간주에 백분 테두리, 14세기안은 녹색 바탕 원문 (단청 토글이 고름)
+    rafterEnd: std({ map: rafterEndTexture({ base: P.timberRed, white: P.baekbun }, '12'), color: 0xffffff, roughness: 0.8 }),
+    rafterEnd14: std({ map: rafterEndTexture({ green: P.noerok, red: P.lacquerRed, white: P.baekbun, ink: P.meok }, '14'), color: 0xffffff, roughness: 0.8 }),
     lacquer: std({ color: P.lacquerRed, roughness: 0.45 }),                                      // 난간·편액 바탕
     gilt: std({ color: P.giltBronze, roughness: 0.35, metalness: 0.75 }),                       // 금동 장식·화주
     goldLeaf: std({ color: P.gold, roughness: 0.3, metalness: 0.85 }),

@@ -8,6 +8,7 @@
 // 치수 규칙은 spec.modelingGuide(column·bracket·roof·twoStoryGatehouse·platforms·dancheong12thCentury)를 따릅니다.
 import * as THREE from 'three';
 import { GeoSink } from './building-geo.js';
+import { textureMean } from '../core/textures.js';
 import { RoofShape, buildRoof } from './roof.js';
 import {
   member, platformBox, platformStair, plinth, column, bracketSet, cornerBracket, bayInfill, railing,
@@ -37,9 +38,9 @@ function buildingMats(mats) {
   return m;
 }
 
-function colorsFor(mats, celadon) {
+function colorsFor(mats, celadon, dc14 = false) {
   const bm = buildingMats(mats);
-  const key = celadon ? 'c' : 'g';
+  const key = `${celadon ? 'c' : 'g'}${dc14 ? '14' : ''}`;
   if (bm.colors.has(key)) return bm.colors.get(key);
   const P = mats.palette || {};
   const c = (hex, k = 1) => new THREE.Color(hex).multiplyScalar(k);
@@ -54,6 +55,17 @@ function colorsFor(mats, celadon) {
     eaveLight: celadon ? c(P.celadonTile || '#8FB8A6') : c(P.roofTileHighlight || '#72767A'),
     chimi: celadon ? c(P.celadonTile || '#8FB8A6', 0.9) : c(P.roofTile || '#5A5D5E', 0.95),
   };
+  // 먼 단계(low)에서 무늬 텍스처 대신 칠할 평균색 (중간 단계와 밝기가 튀지 않게)
+  const mean = (m, fb) => (m && textureMean(m.map)) || fb.clone();
+  C.lattice = mean(mats.doorLattice, C.plaster);
+  C.plasterWall = mean(mats.plaster, C.plaster);
+  C.window = C.plasterWall.clone().lerp(C.lattice, 0.35);
+  C.tile = mean(celadon ? mats.tileCeladon : mats.tileGray, C.eave);
+  C.ashlar = mean(mats.stone, C.granite);
+  C.brick = c(P.brickGray || '#6F6D69');
+  C.gilt = c(P.giltBronze || '#B48A4A');
+  // 창방 위 부재(공포·장여·도리·보·서까래·부연·박공)의 바탕: 12세기는 석간주, 14세기안(상록하단)은 뇌록. 기둥·창호는 그대로
+  C.up = dc14 ? { ...C, timber: c(P.noerok || '#6B8A62'), timberDark: c(P.noerok || '#6B8A62', 0.6) } : C;
   bm.colors.set(key, C);
   return C;
 }
@@ -122,6 +134,23 @@ function derive(def, opts) {
   };
 }
 
+// 벽 한 칸의 종류 (high·medium 은 창호 부재로, low 는 평균색 면으로 그림)
+function bayType(B, key, i, nb) {
+  const mid = i === (nb - 1) / 2 || Math.abs(i - (nb - 1) / 2) < 0.6;
+  if (B.walls === 'upper') return key === 'front' || key === 'back' ? 'lattice' : 'plaster';
+  if (B.shrine) {
+    // 사당(경령전): 남면 가운데 문 셋(판문), 나머지는 두꺼운 벽
+    const nd = Math.min(nb, B.doors ?? 3), f0 = Math.floor((nb - nd) / 2);
+    return key === 'front' && i >= f0 && i < f0 + nd ? 'plank' : 'plaster';
+  }
+  if (key === 'front') {
+    if (B.rank <= 2 || nb <= 3) return 'lattice';
+    return Math.abs(i - (nb - 1) / 2) <= Math.max(0.5, nb / 6) ? 'lattice' : 'window';
+  }
+  if (key === 'back') return mid ? 'lattice' : 'plaster';
+  return mid && nb >= 3 && B.rank <= 3 ? 'window' : 'plaster';
+}
+
 // 몸채 설정 (한 층)
 function bodyConfig(P, o) {
   const rank = o.rank ?? P.rank;
@@ -143,6 +172,7 @@ function bodyConfig(P, o) {
 // ─────────────── 몸채 (기둥·공포·벽·지붕) ───────────────
 function buildBody(ctx, B) {
   const { S, F, C, high, fine, P } = ctx;
+  const Cu = C.up;
   const { xs, zs, H, Dm, n } = B;
   const nx = xs.length, nz = zs.length;
   const hw = xs[nx - 1], hd = zs[nz - 1];
@@ -229,7 +259,7 @@ function buildBody(ctx, B) {
     for (const x of xs) S.box('painted', x * kx, (floorY + topY) / 2, zD, 0.62 * Dm, topY - floorY, 0.62 * Dm, { col: C.timber, skip: '-y' });
     member(S, 'beam', V3(-hx - 0.1, topY + cbH, zD), V3(hx + 0.1, topY + cbH, zD), cbH, cbD, { uv: 'member' });
     for (const x of xs) {
-      member(S, 'painted', V3(x * kx, topY + cbH * 0.9, -hz), V3(x * kx, topY + cbH * 0.9, hz), cbH * 0.9, cbD * 0.9, { col: C.timber });
+      member(S, 'painted', V3(x * kx, topY + cbH * 0.9, -hz), V3(x * kx, topY + cbH * 0.9, hz), cbH * 0.9, cbD * 0.9, { col: Cu.timber });
     }
   }
 
@@ -259,7 +289,7 @@ function buildBody(ctx, B) {
     }
     for (let i = 1; i < nx - 1; i++) {
       const x = xs[i] * kx, y = yJ(xs[i]) - 0.02;
-      member(S, 'painted', V3(x, y, -hz), V3(x, y, hz), Dm * 0.95, Dm * 0.7, { col: C.timber, under: C.hwangdan, ext: 0.1 });
+      member(S, 'painted', V3(x, y, -hz), V3(x, y, hz), Dm * 0.95, Dm * 0.7, { col: Cu.timber, under: C.hwangdan, ext: 0.1 });
     }
   }
 
@@ -277,7 +307,17 @@ function buildBody(ctx, B) {
   if (!high) {
     const yT = colTop(0) - cbH;
     if (B.walls === 'hall' || B.walls === 'upper') {
-      S.box('painted', 0, (floorY + yT) / 2, 0, 2 * hw - 0.1, yT - floorY, 2 * hd - 0.1, { col: C.plaster, skip: '-y+y' });
+      // 칸마다 창호·벽의 평균색 면 (중간 단계와 정면 밝기가 맞게)
+      const LC = { lattice: C.lattice, window: C.window, plank: C.timber, plaster: C.plasterWall };
+      for (const s of sides) {
+        const nb = s.pts.length - 1;
+        const o = 0.05;
+        for (let i = 0; i < nb; i++) {
+          const A = s.pts[i], Bp = s.pts[i + 1];
+          const a = [A.x - s.n[0] * o, A.z - s.n[2] * o], b = [Bp.x - s.n[0] * o, Bp.z - s.n[2] * o];
+          S.quad('painted', [a[0], floorY, a[1]], [b[0], floorY, b[1]], [b[0], yT, b[1]], [a[0], yT, a[1]], LC[bayType(B, s.key, i, nb)], undefined, s.n);
+        }
+      }
     } else if (B.walls === 'gate' && B.doorLine !== null) {
       S.box('painted', 0, (floorY + yT) / 2, B.doorLine, 2 * hw, yT - floorY, 0.2, { col: C.timber, skip: '-y+y-x+x' });
     }
@@ -291,18 +331,7 @@ function buildBody(ctx, B) {
           const pb = s.key === 'front' || s.key === 'back' ? V3(raw[i + 1], 0, 0) : V3(0, 0, raw[i + 1]);
           const u0 = pa.x * an.x + pa.z * an.z - (origin.x * an.x + origin.z * an.z);
           const u1 = pb.x * an.x + pb.z * an.z - (origin.x * an.x + origin.z * an.z);
-          const mid = i === (nb - 1) / 2 || Math.abs(i - (nb - 1) / 2) < 0.6;
-          let type = 'plaster';
-          if (B.walls === 'upper') type = s.key === 'front' || s.key === 'back' ? 'lattice' : 'plaster';
-          else if (B.shrine) {
-            // 사당(경령전): 남면 가운데 문 셋(판문), 나머지는 두꺼운 벽
-            const nd = Math.min(nb, B.doors ?? 3), f0 = Math.floor((nb - nd) / 2);
-            type = s.key === 'front' && i >= f0 && i < f0 + nd ? 'plank' : 'plaster';
-          } else if (s.key === 'front') {
-            if (B.rank <= 2 || nb <= 3) type = 'lattice';
-            else type = Math.abs(i - (nb - 1) / 2) <= Math.max(0.5, nb / 6) ? 'lattice' : 'window';
-          } else if (s.key === 'back') type = mid ? 'lattice' : 'plaster';
-          else type = mid && nb >= 3 && B.rank <= 3 ? 'window' : 'plaster';
+          const type = bayType(B, s.key, i, nb);
           const xA = s.key === 'front' || s.key === 'back' ? pa.x : (s.key === 'right' ? hw : -hw);
           const xB = s.key === 'front' || s.key === 'back' ? pb.x : xA;
           const yT = Math.min(colTop(xA), colTop(xB)) - cbH + 0.04;
@@ -326,7 +355,7 @@ function buildBody(ctx, B) {
 
   // ── 공포 ──
   const B0 = {
-    jw, hJ, tH, cH, sH, aW, p, n, C, high, q: fine && B.rank === 1 ? 'full' : 'simple',
+    jw, hJ, tH, cH, sH, aW, p, n, C: Cu, high, q: fine && B.rank === 1 ? 'full' : 'simple',
     band: fine && (B.rank <= 2 || P.boost) && !B.skirt, maxL: bayMin - 0.3 * jw, soro: fine ? (B.rank <= 2 ? 3 : 2) : 1,
   };
   if (high) {
@@ -360,10 +389,10 @@ function buildBody(ctx, B) {
     // 먼 거리: 공포대를 띠 상자로
     const yb0 = colTop(0), yt0 = yJ(0) + jH;
     const hh = yt0 - yb0, th = jw * 1.1;
-    S.box('painted', 0, yb0 + hh / 2, hz, 2 * hx + th, hh, th, { col: C.timber, under: C.hwangdan, skip: '+y' });
-    S.box('painted', 0, yb0 + hh / 2, -hz, 2 * hx + th, hh, th, { col: C.timber, under: C.hwangdan, skip: '+y' });
-    S.box('painted', hx, yb0 + hh / 2, 0, th, hh, 2 * hz, { col: C.timber, under: C.hwangdan, skip: '+y' });
-    S.box('painted', -hx, yb0 + hh / 2, 0, th, hh, 2 * hz, { col: C.timber, under: C.hwangdan, skip: '+y' });
+    S.box('painted', 0, yb0 + hh / 2, hz, 2 * hx + th, hh, th, { col: Cu.timber, under: C.hwangdan, skip: '+y' });
+    S.box('painted', 0, yb0 + hh / 2, -hz, 2 * hx + th, hh, th, { col: Cu.timber, under: C.hwangdan, skip: '+y' });
+    S.box('painted', hx, yb0 + hh / 2, 0, th, hh, 2 * hz, { col: Cu.timber, under: C.hwangdan, skip: '+y' });
+    S.box('painted', -hx, yb0 + hh / 2, 0, th, hh, 2 * hz, { col: Cu.timber, under: C.hwangdan, skip: '+y' });
   }
 
   // ── 장여·도리 ──
@@ -384,9 +413,9 @@ function buildBody(ctx, B) {
     }
   };
   if (high) {
-    ring(hx, hz, (x) => yJ(x) + jH, (A, Bp) => member(S, 'painted', A, Bp, jH, jD, { col: C.timber, under: C.hwangdan }), gable ? undefined : 0.1);
-    if (gable) for (const sx of [1, -1]) member(S, 'painted', V3(sx * hx, yJ(hw) + jH, -hz), V3(sx * hx, yJ(hw) + jH, hz), jH, jD, { col: C.timber, under: C.hwangdan });
-    ring(hx, hz, (x) => yP(x), (A, Bp) => S.cyl('painted', A, Bp, rP, rP, 8, C.timber), gable ? undefined : rP + 0.1);
+    ring(hx, hz, (x) => yJ(x) + jH, (A, Bp) => member(S, 'painted', A, Bp, jH, jD, { col: Cu.timber, under: C.hwangdan }), gable ? undefined : 0.1);
+    if (gable) for (const sx of [1, -1]) member(S, 'painted', V3(sx * hx, yJ(hw) + jH, -hz), V3(sx * hx, yJ(hw) + jH, hz), jH, jD, { col: Cu.timber, under: C.hwangdan });
+    ring(hx, hz, (x) => yP(x), (A, Bp) => S.cyl('painted', A, Bp, rP, rP, 8, Cu.timber), gable ? undefined : rP + 0.1);
     if (n > 0) {
       const d = n * p;
       const tOP = B.ov - d;
@@ -395,9 +424,9 @@ function buildBody(ctx, B) {
       const yJo = (x) => bktBase(x) + hJ + n * tH;
       ring(hx + d, hz + d, (x) => yOP(x) - rP, (A, Bp) => {
         const hh = Math.max(0.06, A.y - yJo(A.x / kx));
-        member(S, 'painted', A, Bp, hh, jD, { col: C.timber, under: C.hwangdan });
+        member(S, 'painted', A, Bp, hh, jD, { col: Cu.timber, under: C.hwangdan });
       }, gable ? undefined : 0.1);
-      ring(hx + d, hz + d, yOP, (A, Bp) => S.cyl('painted', A, Bp, rP, rP, 8, C.timber), gable ? undefined : rP + 0.1);
+      ring(hx + d, hz + d, yOP, (A, Bp) => S.cyl('painted', A, Bp, rP, rP, 8, Cu.timber), gable ? undefined : rP + 0.1);
     }
   }
 
@@ -430,7 +459,7 @@ function buildBody(ctx, B) {
   const info = buildRoof(shape, S, {
     detail: ctx.lvl,
     keys: { tile: 'tile', under: 'under', trim: 'trim', paint: 'painted', plank: 'plank', end: 'rafterEnd', gilt: 'gilt' },
-    C, te, T,
+    C: Cu, te, T,
     ridge: R, hip: Hh,
     chimi: Math.min(B.chimi, 0.34 * Hroof), finialTop: B.finialTop, finialCorners: B.finialCorners,
     gableWall: true, gableOrnament: B.rank <= 2,
@@ -455,7 +484,8 @@ function buildBody(ctx, B) {
 
 // 맞배 박공면: 측면 기둥선 위 삼각 벽 + 노출 가구
 function gableEnd(ctx, g) {
-  const { S, C } = ctx;
+  const { S } = ctx;
+  const C = ctx.C.up;
   const { shape, roofY, T, hx, hz, yP, hw, rP, Dm, high, fine } = g;
   const b = shape.b;
   for (const sx of [1, -1]) {
@@ -568,7 +598,7 @@ function buildGatehouse(ctx) {
   const yD0 = Math.max(ringTop - 0.2, L.yP(P.W / 2) + 0.45 * P.Dm + 0.06);
   const deckTh = 0.26;
   const yDeck = yD0 + deckTh + 0.2;
-  S.box('painted', 0, (yD0 + yDeck) / 2, 0, 2 * ex, yDeck - yD0, 2 * ez, { col: C.timber, top: C.floor, under: C.hwangdan });
+  S.box('painted', 0, (yD0 + yDeck) / 2, 0, 2 * ex, yDeck - yD0, 2 * ez, { col: C.up.timber, top: C.floor, under: C.hwangdan });
   // 평좌 테두리 백분 선
   S.box('painted', 0, yD0 + 0.05, 0, 2 * ex + 0.02, 0.05, 2 * ez + 0.02, { col: C.white, skip: '-y+y' });
   // 난간
@@ -726,6 +756,8 @@ function buildExtras(ctx) {
   }
 }
 
+const NO_CAST = new Set(['rafterEnd', 'gilt', 'plaque']);
+
 function resolveMat(key, mats, P, ctx) {
   const bm = buildingMats(mats);
   switch (key) {
@@ -735,7 +767,7 @@ function resolveMat(key, mats, P, ctx) {
     case 'painted': return bm.painted;
     case 'trim': return P.celadon ? bm.trimCeladon : bm.trimGray;
     case 'beam': return P.dc14 ? mats.beam14 : (P.rank <= 2 || P.boost ? mats.beam : mats.beamPlain);
-    case 'rafterEnd': return mats.rafterEnd;
+    case 'rafterEnd': return P.dc14 ? mats.rafterEnd14 || mats.rafterEnd : mats.rafterEnd;
     case 'plaster': return mats.plaster;
     case 'lattice': return mats.doorLattice;
     case 'plank': return mats.doorPlank;
@@ -761,14 +793,20 @@ export function createBuilding(def, mats, opts = {}) {
   const lvl = opts.detail === 'low' ? 'low' : opts.detail === 'medium' ? 'medium' : 'high';
   const high = lvl !== 'low';
   const P = derive(def, opts);
+  const C = colorsFor(mats, P.celadon, P.dc14);
   const ctx = {
-    def, P, lvl, high, fine: lvl === 'high', C: colorsFor(mats, P.celadon),
+    def, P, lvl, high, fine: lvl === 'high', C,
     F: new GeoSink(['stoneV']), S: new GeoSink(['painted', 'trim']),
   };
   // 단색 재질은 정점색 메시로 합쳐 그리기 호출을 줄임
-  ctx.F.alias('stoneTop', 'stoneV', ctx.C.granite).alias('stoneW', 'stoneV', ctx.C.graniteW);
-  ctx.S.alias('under', 'painted', ctx.C.under);
-  if (lvl === 'low') ctx.S.alias('plank', 'painted', ctx.C.timber);
+  ctx.F.alias('stoneTop', 'stoneV', C.granite).alias('stoneW', 'stoneV', C.graniteW);
+  ctx.S.alias('under', 'painted', C.under);
+  if (lvl === 'low') {
+    // 먼 단계: 무늬 텍스처는 보이지 않으므로 모든 재질을 평균색으로 정점색 두 메시(기단·몸체)에 합침
+    ctx.F.alias('stone', 'stoneV', C.ashlar).alias('brick', 'stoneV', C.brick);
+    for (const [k, col] of [['plank', C.timber], ['tile', C.tile], ['trim', C.ridge], ['beam', C.up.timber], ['rafterEnd', C.up.timber],
+      ['plaster', C.plasterWall], ['lattice', C.lattice], ['pobyeok', C.plasterWall], ['gilt', C.gilt], ['plaque', C.lacquer]]) ctx.S.alias(k, 'painted', col);
+  }
   buildFoundation(ctx);
   let ridgeTop;
   if (P.stories === 2) ridgeTop = buildGatehouse(ctx);
@@ -782,6 +820,10 @@ export function createBuilding(def, mats, opts = {}) {
   group.name = def.id;
   const f = ctx.F.build('foundation', matFor, def.id);
   const s = ctx.S.build('superstructure', matFor, def.id);
+  // 그림자 패스에서 뺄 것: 서까래 마구리·금동 장식·편액(몇 px 짜리 그림자, 서까래·지붕 그림자 안), 먼 단계의 기단(수백 m 밖 1–2 m 기단).
+  // 창호·판문·포벽은 빛이 새지 않게 그대로 드리움
+  for (const m of s.children) if (NO_CAST.has(m.userData.matKey)) m.castShadow = false;
+  if (lvl === 'low') for (const m of f.children) m.castShadow = false;
   group.add(f, s);
   const gy = def.groundY ?? 0;
   group.position.set(def.cx ?? 0, gy, def.cz ?? 0);
@@ -801,27 +843,96 @@ export function createBuilding(def, mats, opts = {}) {
  * 거리에 따라 high → medium → low 로 바뀌는 LOD. 모든 단계가 같은 이름('foundation'/'superstructure')의 자식을 가집니다.
  * 폐허 모드는 lod.traverse(o => { if (o.name === 'superstructure') o.visible = false; }) 로 모든 단계를 숨깁니다.
  *   opts.lodDistances = [medium, low] (m) 로 전환 거리를 바꿀 수 있습니다 (휴대폰은 더 짧게).
+ *   전환에는 10 % 되돌림 여유(hysteresis)를 두어 경계에서 깜박이지 않게 합니다.
+ *   high 단계는 처음에 짓지 않고, 카메라가 medium 거리의 1.5배 안에 들어오면 그때 짓습니다(시작 시간·메모리 절약).
+ *   곧 필요한 미리 짓기는 60 ms 에 한 채씩, 지금 필요하면 바로 짓습니다. opts.eagerHigh = true 면 처음부터 모두 짓습니다.
+ *   lod.userData.ensureHigh() 로 바로 지을 수도 있습니다. 새로 지은 단계는 폐허 모드·선택 강조 상태를 따릅니다.
  */
+const _cp = new THREE.Vector3(), _op = new THREE.Vector3();
+let lastLazyBuild = -Infinity;
+const HYST = 0.1;
+
+class BuildingLOD extends THREE.LOD {
+  update(camera) {
+    if (this.makeHigh) {
+      _cp.setFromMatrixPosition(camera.matrixWorld);
+      _op.setFromMatrixPosition(this.matrixWorld);
+      const d = _cp.distanceTo(_op) / camera.zoom;
+      const dMed = this.userData.lodDistances[0];
+      if (d < dMed * 1.5) {
+        const now = performance.now();
+        if (d < dMed * (1 - HYST) || now - lastLazyBuild > 60) { lastLazyBuild = now; this.ensureHigh(); }
+      }
+    }
+    // 선택 강조가 풀렸으면 새 단계에 따라 붙인 강조도 뗌
+    if (this.rims && !this.rims.src.parent) {
+      for (const ov of this.rims.list) ov.parent?.remove(ov);
+      this.rims = null;
+    }
+    super.update(camera);
+  }
+
+  ensureHigh() {
+    const make = this.makeHigh;
+    if (!make) return null;
+    this.makeHigh = null;
+    const g = make();
+    const ref = this.levels[0]?.object;
+    g.position.set(0, 0, 0);
+    g.rotation.set(0, 0, 0);
+    g.name = `${this.name}:high`;
+    // 폐허 모드: 지금 보이는 단계의 몸체 상태를 따름
+    const sup = ref?.getObjectByName('superstructure');
+    if (sup && !sup.visible) g.traverse((o) => { if (o.name === 'superstructure') o.visible = false; });
+    this.addLevel(g, 0, 0);
+    g.updateMatrixWorld(true);
+    // LOD 가 고정(freeze)돼 있으면 새 단계도 행렬을 한 번만 계산 (매 프레임 수십 개 행렬 다시 짜기를 막음)
+    if (!this.matrixAutoUpdate) g.traverse((o) => { o.matrixAutoUpdate = false; });
+    // 선택 강조(info.js 의 rim 메시)가 붙어 있으면 새 단계에도 같은 재질로 붙임
+    const src = [];
+    ref?.traverse((o) => { if (o.userData.__rim) src.push(o); });
+    if (src.length) {
+      const list = [];
+      g.traverse((m) => {
+        if (!m.isMesh || m.userData.__rim) return;
+        const ov = new THREE.Mesh(m.geometry, src[0].material);
+        ov.userData.__rim = true;
+        ov.raycast = () => {};
+        ov.renderOrder = src[0].renderOrder;
+        m.add(ov);
+        list.push(ov);
+      });
+      this.rims = { src: src[0], list };
+    }
+    this.userData.trianglesByLevel[0] = g.userData.triangles;
+    return g;
+  }
+}
+
 export function createBuildingLOD(def, mats, opts = {}) {
-  const levels = ['high', 'medium', 'low'].map((d) => createBuilding(def, mats, { ...opts, detail: d }));
-  const lod = new THREE.LOD();
+  const make = (d) => createBuilding(def, mats, { ...opts, detail: d });
+  const med = make('medium'), low = make('low');
+  const lod = new BuildingLOD();
   lod.name = def.id;
-  const hi = levels[0];
-  const size = Math.max(hi.userData.size.w, hi.userData.size.d);
+  const size = Math.max(med.userData.size.w, med.userData.size.d);
   const dMed = opts.lodDistances?.[0] ?? clamp(55 + 1.6 * size, 70, 140);
   const dLow = opts.lodDistances?.[1] ?? clamp(150 + 3 * size, 180, 320);
-  levels.forEach((g, i) => {
+  for (const [g, dist] of [[med, dMed], [low, dLow]]) {
     g.position.set(0, 0, 0);
     g.rotation.set(0, 0, 0);
     g.name = `${def.id}:${g.userData.detail}`;
-    lod.addLevel(g, [0, dMed, dLow][i]);
-  });
+    lod.addLevel(g, dist, HYST);
+  }
   lod.position.set(def.cx ?? 0, def.groundY ?? 0, def.cz ?? 0);
   lod.rotation.y = -THREE.MathUtils.degToRad(def.rotationDeg || 0);
   lod.userData = {
-    ...hi.userData,
+    ...med.userData,
+    detail: 'lod',
     lodDistances: [dMed, dLow],
-    trianglesByLevel: levels.map((g) => g.userData.triangles),
+    trianglesByLevel: [null, med.userData.triangles, low.userData.triangles],
+    ensureHigh: () => lod.ensureHigh(),
   };
+  lod.makeHigh = () => make('high');
+  if (opts.eagerHigh) lod.ensureHigh();
   return lod;
 }

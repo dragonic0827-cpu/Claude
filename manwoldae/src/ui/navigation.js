@@ -2,7 +2,9 @@
 //
 // createNavigation({ camera, controls, dom, terrain, spec, joystickRoot }) →
 //   { update(dt) → 움직였는지, flyTo(pos, target, o) → Promise, lookAt(pos, target), cancelFlight(),
-//     setWalk(on), walking, flying, colliders, onWalkChange(fn), blocked(x, z) }
+//     nudge({ yaw, pitch, pan: [x, z], dolly }) (키보드 궤도·걷기 시선), setWalk(on), walking, flying, interacting,
+//     colliders, onWalkChange(fn), blocked(x, z) }
+// 비행 중에도 OrbitControls 는 켜 둡니다: 누르거나 휠을 굴리면 'start' 로 비행이 끊기고 그 몸짓이 바로 이어집니다.
 import * as THREE from 'three';
 import { h, reducedMotion } from './dom.js';
 
@@ -163,7 +165,6 @@ export function createNavigation({ camera, controls, dom, terrain, spec, joystic
     const dur = o.duration ?? clamp(1.3 + dist / 280, 1.4, 5.5) * 1000;
     // 가까운 비행도 조금 떠올라 회랑·담장 지붕을 넘어가게
     const lift = dist > 20 ? clamp(dist * 0.17, 3, 240) : 0;
-    controls.enabled = false;
     return new Promise((resolve) => {
       flight = { from, fromT, to, toT, dur, lift, t0: performance.now(), resolve };
     });
@@ -195,13 +196,15 @@ export function createNavigation({ camera, controls, dom, terrain, spec, joystic
   const walk = { x: 0, z: 0, y: 0, yaw: 0, pitch: 0, vx: 0, vz: 0 };
   const keys = new Set();
   const joy = { x: 0, y: 0, active: false };
-  const MOVE_KEYS = new Set(['KeyW', 'KeyA', 'KeyS', 'KeyD', 'ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight', 'ShiftLeft', 'ShiftRight', 'KeyQ', 'KeyE']);
+  const MOVE_KEYS = new Set(['KeyW', 'KeyA', 'KeyS', 'KeyD', 'ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight', 'ShiftLeft', 'ShiftRight', 'KeyQ', 'KeyE', 'PageUp', 'PageDown']);
   const isTyping = (e) => /^(INPUT|TEXTAREA|SELECT)$/.test(e.target?.tagName || '') || e.target?.isContentEditable;
   addEventListener('keydown', (e) => {
     if (!walking || isTyping(e) || e.ctrlKey || e.metaKey || e.altKey) return;
+    // 패널·라디오 묶음 안의 방향키·PageUp/Down 은 그쪽(스크롤·고르기)에 맡김 — W A S D 는 어디서나
+    if (/^(Arrow|Page)/.test(e.code) && e.target?.closest?.('.sheet, .pop, .minimap, [role="radiogroup"], [role="tablist"], [role="menu"]')) return;
     if (MOVE_KEYS.has(e.code)) {
       keys.add(e.code);
-      if (e.code.startsWith('Arrow')) e.preventDefault();
+      if (e.code.startsWith('Arrow') || e.code.startsWith('Page')) e.preventDefault();
     }
   });
   addEventListener('keyup', (e) => keys.delete(e.code));
@@ -211,7 +214,7 @@ export function createNavigation({ camera, controls, dom, terrain, spec, joystic
   let look = null;
   dom.addEventListener('pointerdown', (e) => {
     if (flight && !walking) cancelFlight();
-    if (!walking || (e.pointerType === 'mouse' && e.button !== 0)) return;
+    if (!walking || look || (e.pointerType === 'mouse' && e.button !== 0)) return;   // 첫 손가락만 따라감
     look = { id: e.pointerId, x: e.clientX, y: e.clientY };
     dom.setPointerCapture?.(e.pointerId);
   });
@@ -313,6 +316,8 @@ export function createNavigation({ camera, controls, dom, terrain, spec, joystic
     if (keys.has('KeyA')) fx -= 1;
     if (keys.has('ArrowLeft') || keys.has('KeyQ')) walk.yaw += 1.6 * dt;
     if (keys.has('ArrowRight') || keys.has('KeyE')) walk.yaw -= 1.6 * dt;
+    if (keys.has('PageUp')) walk.pitch = clamp(walk.pitch + 1.1 * dt, -1.25, 1.25);
+    if (keys.has('PageDown')) walk.pitch = clamp(walk.pitch - 1.1 * dt, -1.25, 1.25);
     if (joy.active) { fx += joy.x; fz -= joy.y; }
     const len = Math.hypot(fx, fz);
     if (len > 1) { fx /= len; fz /= len; }
@@ -354,8 +359,41 @@ export function createNavigation({ camera, controls, dom, terrain, spec, joystic
     return active;
   }
 
+  // ─────────── 키보드 궤도: 방향키로 돌리기, Shift+방향키로 옮기기, +/− 로 가까이·멀리 ───────────
+  const _sph = new THREE.Spherical(), _off = new THREE.Vector3(), _fw = new THREE.Vector3();
+  function nudge({ yaw = 0, pitch = 0, pan = null, dolly = 1 } = {}) {
+    if (walking) {
+      walk.yaw += yaw;
+      walk.pitch = clamp(walk.pitch + pitch, -1.25, 1.25);
+      return true;
+    }
+    cancelFlight();
+    const t = controls.target, p = camera.position;
+    _off.copy(p).sub(t);
+    _sph.setFromVector3(_off);
+    _sph.theta += yaw;
+    _sph.phi = clamp(_sph.phi + pitch, 0.08, controls.maxPolarAngle);
+    _sph.radius = clamp(_sph.radius * dolly, controls.minDistance, controls.maxDistance);
+    _off.setFromSpherical(_sph);
+    if (pan) {
+      camera.getWorldDirection(_fw);
+      _fw.y = 0;
+      if (_fw.lengthSq() < 1e-6) _fw.set(0, 0, -1);
+      _fw.normalize();
+      const k = Math.max(3, _sph.radius * 0.06);
+      // 오른쪽 = (−fz, 0, fx)
+      t.x += (-_fw.z * pan[0] + _fw.x * pan[1]) * k;
+      t.z += (_fw.x * pan[0] + _fw.z * pan[1]) * k;
+    }
+    p.copy(t).add(_off);
+    camera.lookAt(t);
+    userTail = 0.8;   // 옮긴 뒤 보는 점 높이를 지면에 맞춤(clampOrbit)
+    controls.update();
+    return true;
+  }
+
   return {
-    update, flyTo, lookAt, cancelFlight, setWalk, blocked, colliders,
+    update, flyTo, lookAt, cancelFlight, setWalk, blocked, colliders, nudge,
     get walking() { return walking; },
     get flying() { return !!flight; },
     get interacting() { return userActive || !!look || joy.active || keys.size > 0; },

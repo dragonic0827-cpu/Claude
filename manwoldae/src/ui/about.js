@@ -1,5 +1,5 @@
-// 정보 시트(연표 · 전각 목록 · 고증 자료 · 복원에 대하여)와 도움말 시트
-import { h, icon, confidenceBadge, CONFIDENCE } from './dom.js';
+// 역사와 고증 시트(연표 · 장소 목록 · 고증 자료 · 복원에 대하여)와 도움말 시트
+import { h, icon, confidenceBadge, CONFIDENCE, nobreak, confidenceOf } from './dom.js';
 
 // 학설에 따라 바꿔 보는 복원 선택지 (docs/research.md 6.1 · 5장)
 export const ALTERNATIVES = [
@@ -16,7 +16,7 @@ export const ALTERNATIVES = [
 export function createAbout({ spec, sheets, onSelect, onOpenChange, onAlt }) {
   const tabs = [
     { id: 'history', label: '연표' },
-    { id: 'places', label: '전각 목록' },
+    { id: 'places', label: '장소 목록' },
     { id: 'sources', label: '고증 자료' },
     { id: 'method', label: '복원에 대하여' },
   ];
@@ -57,28 +57,29 @@ export function createAbout({ spec, sheets, onSelect, onOpenChange, onAlt }) {
   for (const e of spec.history || []) {
     hist.append(h('li', {},
       h('span', { class: 'tl-year' }, e.label || String(e.year)),
-      h('div', { class: 'tl-body' }, h('p', {}, e.textKo || ''), e.confidence ? confidenceBadge(e.confidence, e.confidenceNote) : null,
+      h('div', { class: 'tl-body' }, h('p', {}, nobreak(e.textKo || '')), e.confidence ? confidenceBadge(e.confidence, e.confidenceNote) : null,
         e.confidenceNote ? h('span', { class: 'conf-note' }, e.confidenceNote) : null)));
   }
   panels.history.append(hist);
 
-  // 전각 목록
+  // 장소 목록 (전각·문·누정·지점·다리)
   const groups = [
     ['전각', (spec.buildings || []).filter((b) => b.kind === 'hall')],
     ['문과 문루', (spec.buildings || []).filter((b) => b.kind === 'gate' || b.kind === 'gatehouse')],
     ['누각·정자', (spec.buildings || []).filter((b) => b.kind === 'pavilion')],
-    ['유적과 지점', spec.landmarks || []],
+    ['지점', spec.landmarks || []],
     ['다리', spec.bridges || []],
   ];
   for (const [title, arr] of groups) {
     if (!arr.length) continue;
     const ul = h('ul', { class: 'place-list' });
     for (const d of [...arr].sort((a, b) => (a.rank ?? 5) - (b.rank ?? 5) || (a.cz ?? a.z ?? 0) - (b.cz ?? b.z ?? 0))) {
-      const c = CONFIDENCE[d.confidence];
+      const { confidence: cf, note } = confidenceOf(d);
+      const c = CONFIDENCE[cf];
       ul.append(h('li', {}, h('button', { class: 'place', type: 'button', onclick: () => onSelect?.(d.id) },
-        h('span', { class: `dot-conf ${c?.cls || 'c-none'}`, title: d.confidence || '', 'aria-hidden': 'true' }),
+        h('span', { class: `dot-conf ${c?.cls || 'c-none'}`, title: note || cf || '', 'aria-hidden': 'true' }),
         h('span', { class: 'place-n' }, d.nameKo), d.nameHanja ? h('span', { class: 'place-h', lang: 'zh-Hant' }, d.nameHanja) : null,
-        d.confidence ? h('span', { class: 'sr-only' }, `, 신뢰도 ${d.confidence}`) : null)));
+        cf ? h('span', { class: 'sr-only' }, `, 신뢰도 ${cf}`) : null)));
     }
     panels.places.append(h('h3', { class: 'group-title' }, title), ul);
   }
@@ -127,7 +128,7 @@ export function createAbout({ spec, sheets, onSelect, onOpenChange, onAlt }) {
     h('h3', { class: 'group-title', id: 'alt-title' }, '다른 학설로 바꿔 보기'),
     altList,
     h('h3', { class: 'group-title' }, '유적 보기'),
-    h('p', {}, '1361년 홍건적의 침입으로 불탄 뒤 궁궐은 다시 세워지지 않았습니다. ‘유적’ 단추를 누르면 목조 건물을 걷어 내고 축대·계단·초석처럼 오늘까지 남은 터만 보여 줍니다.'),
+    h('p', {}, '1361년 홍건적의 침입으로 불탄 뒤 궁궐은 다시 세워지지 않았습니다. ‘유적’ 단추를 누르면 목조 건물과 담장을 걷어 내고 축대·계단·초석처럼 오늘까지 남은 터만 보여 줍니다.'),
     h('p', { class: 'muted' }, '지형은 SRTM 30 m 표고 자료를 바탕으로 만들었고, 궁성 안은 발굴된 대지 높이에 맞추어 다듬었습니다.'),
   );
 
@@ -142,22 +143,36 @@ export function createAbout({ spec, sheets, onSelect, onOpenChange, onAlt }) {
   return { open: (tab) => { sheets.open('about'); if (tab) show(tab); onOpenChange?.(true); }, close: () => sheets.close('about'), show, syncAlt };
 }
 
-export function createHelp({ sheets, onOpenChange, touch }) {
+// keys: { on, set(on) } — 한 글자 단축키 켜고 끄기 (WCAG 2.1.4)
+export function createHelp({ sheets, onOpenChange, touch, keys = null }) {
   const row = (k, v) => h('tr', {}, h('th', { scope: 'row' }, k), h('td', {}, v));
   const kbd = (...ks) => ks.map((k, i) => [i ? ' ' : '', h('kbd', {}, k)]);
+  let keySwitch = null;
+  if (keys) {
+    const state = h('span', { class: 'alt-state' }, keys.on ? '켜짐' : '꺼짐');
+    keySwitch = h('button', {
+      class: 'alt-switch', type: 'button', role: 'switch', 'aria-checked': String(!!keys.on),
+      onclick: () => {
+        const on = keySwitch.getAttribute('aria-checked') !== 'true';
+        keys.set(on);
+        keySwitch.setAttribute('aria-checked', String(on));
+        state.textContent = on ? '켜짐' : '꺼짐';
+      },
+    }, h('span', { class: 'alt-track', 'aria-hidden': 'true' }, h('i')), h('span', { class: 'alt-title' }, '한 글자 단축키'), state);
+  }
   const body = [
     h('h2', { class: 'sheet-title', id: 'help-title' }, '둘러보는 법'),
     h('h3', { class: 'group-title' }, '하늘에서 보기'),
     h('table', { class: 'keys' }, h('tbody', {},
-      row('돌려 보기', touch ? '한 손가락으로 끌기' : '왼쪽 단추로 끌기'),
-      row('옮기기', touch ? '두 손가락으로 끌기' : '오른쪽 단추로 끌기 · Shift+끌기'),
-      row('가까이·멀리', touch ? '두 손가락 벌리기·오므리기' : '휠 (커서 쪽으로 다가감)'),
+      row('돌려 보기', touch ? '한 손가락으로 끌기' : ['왼쪽 단추로 끌기 · ', kbd('←', '→', '↑', '↓')]),
+      row('옮기기', touch ? '두 손가락으로 끌기' : ['오른쪽 단추로 끌기 · Shift+끌기 · Shift+방향키']),
+      row('가까이·멀리', touch ? '두 손가락 벌리기·오므리기' : ['휠 (커서 쪽으로 다가감) · ', kbd('+', '−'), ' 또는 ', kbd('PgUp', 'PgDn')]),
       row('정보 보기', '전각이나 이름표를 누르기'),
-      row('평면도', '평면도를 누르면 그곳으로 날아감'))),
+      row('평면도', touch ? '평면도를 누르면 그곳으로 날아감' : ['평면도를 누르거나, 평면도에서 방향키로 표적을 옮기고 ', kbd('Enter')]))),
     h('h3', { class: 'group-title' }, '걸어서 보기'),
     h('table', { class: 'keys' }, h('tbody', {},
       row('걷기', touch ? '왼쪽 아래 조이스틱' : [kbd('W', 'A', 'S', 'D'), ' 또는 방향키']),
-      row('둘러보기', '화면 끌기'),
+      row('둘러보기', touch ? '화면 끌기' : ['화면 끌기 · 위아래 ', kbd('PgUp', 'PgDn')]),
       row('달리기', kbd('Shift')),
       row('나가기', [kbd('Esc'), ' 또는 걷기 단추']))),
     h('h3', { class: 'group-title' }, '단축키'),
@@ -165,8 +180,9 @@ export function createHelp({ sheets, onOpenChange, touch }) {
       row('시간대', kbd('1', '2', '3', '4')),
       row('안내 여행', [kbd('T'), ' · 이전/다음 ', kbd('←', '→')]),
       row('이름표 · 유적 · 걷기', kbd('L', 'R', 'G')),
-      row('평면도 · 정보 · 도움말', kbd('M', 'I', 'H')),
+      row('평면도 · 역사 · 도움말', kbd('M', 'I', 'H')),
       row('패널 닫기', kbd('Esc')))),
+    keySwitch ? h('div', { class: 'key-switch' }, keySwitch, h('p', { class: 'alt-note' }, '끄면 글자·숫자 단축키가 동작하지 않습니다(방향키·Esc 는 그대로).')) : null,
     h('p', { class: 'muted' }, '움직임 줄이기 설정을 켜 두면 카메라가 날아가지 않고 바로 바뀝니다.'),
   ];
   sheets.create('help', { side: 'left', label: '도움말', labelledBy: 'help-title', body, onClose: () => onOpenChange?.(false) });

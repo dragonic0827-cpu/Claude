@@ -230,15 +230,42 @@ export function dancheong12Texture(pal = {}, { rich = true, seed = 6 } = {}) {
   return t;
 }
 
-// 서까래 마구리/부연 끝 단청용 작은 원형 문양
-export function rafterEndTexture(pal = {}) {
-  const P = { green: '#3f7d62', red: '#9b2d20', blue: '#2f5d8c', yellow: '#d9a83a', white: '#ece6d6', ...pal };
+// 서까래 마구리·부연 끝 원형 문양
+//   style '12': 12세기 기본 — 석간주 바탕에 가는 백분 테두리 (modelingGuide.dancheong12thCentury)
+//   style '14': 14세기안 — 녹색(뇌록) 바탕 원문: 먹선·백분 고리와 주칠 점 (dancheong14thCenturyToggle)
+export function rafterEndTexture(pal = {}, style = '12') {
+  const P = { base: '#8C3A2B', green: '#6B8A62', red: '#B8322A', white: '#EFE8D8', ink: '#1F1B18', ...pal };
   const [c, ctx] = canvas(64, 64);
-  for (const [r, col] of [[32, P.blue], [24, P.white], [18, P.green], [10, P.yellow], [5, P.red]]) {
-    ctx.fillStyle = col;
-    ctx.beginPath(); ctx.arc(32, 32, r, 0, Math.PI * 2); ctx.fill();
+  const disc = (r, col) => { ctx.fillStyle = col; ctx.beginPath(); ctx.arc(32, 32, r, 0, Math.PI * 2); ctx.fill(); };
+  // 네모난 부연 마구리에도 쓰이므로 바탕을 먼저 칠함 (모서리가 검게 나오지 않게)
+  ctx.fillStyle = style === '14' ? P.green : P.base;
+  ctx.fillRect(0, 0, 64, 64);
+  if (style === '14') {
+    for (const [r, col] of [[32, P.ink], [30, P.green], [22, P.white], [19, P.green], [9, P.white], [7, P.red]]) disc(r, col);
+  } else {
+    for (const [r, col] of [[32, P.white], [28.5, P.base]]) disc(r, col);
   }
   return toTexture(c, { aniso: 1 });
+}
+
+// 텍스처(캔버스)의 평균색 → 선형 THREE.Color (먼 LOD 에서 무늬 대신 칠할 색). 캔버스가 아니면 null
+export function textureMean(tex) {
+  if (!tex || !tex.image) return null;
+  if (tex.userData.mean) return tex.userData.mean.clone();
+  const img = tex.image;
+  if (typeof img.getContext !== 'function' || !img.width) return null;
+  let d;
+  try { d = img.getContext('2d').getImageData(0, 0, img.width, img.height).data; } catch { return null; }
+  // sRGB 텍스처는 선형으로 바꿔 평균 (밉맵이 먼 거리에서 보여 주는 색에 가깝게)
+  const srgb = tex.colorSpace === THREE.SRGBColorSpace;
+  const L = new Float32Array(256);
+  for (let i = 0; i < 256; i++) { const v = i / 255; L[i] = !srgb ? v : v <= 0.04045 ? v / 12.92 : ((v + 0.055) / 1.055) ** 2.4; }
+  let r = 0, g = 0, b = 0;
+  const n = d.length / 4;
+  for (let i = 0; i < d.length; i += 4) { r += L[d[i]]; g += L[d[i + 1]]; b += L[d[i + 2]]; }
+  const out = new THREE.Color(r / n, g / n, b / n);
+  tex.userData.mean = out.clone();
+  return out;
 }
 
 // 창호 (띠살문 / 빗살) + 문얼굴

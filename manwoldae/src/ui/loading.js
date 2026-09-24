@@ -4,6 +4,9 @@ export function createLoading() {
   const msg = document.getElementById('loading-msg');
   const bar = document.getElementById('loading-bar');
   let shown = 0;
+  // index.html 의 감시가 늦게 온 모듈을 실패로 적어 두었으면 되돌림
+  root?.classList.remove('failed');
+  msg?.setAttribute('aria-live', 'off');
   return {
     stage(text, frac) {
       if (msg && text) msg.textContent = text;
@@ -13,9 +16,10 @@ export function createLoading() {
         bar.parentElement?.setAttribute('aria-valuenow', String(Math.round(shown * 100)));
       }
     },
+    // 진행 글은 조용히(aria-live=off) 바꾸고, 오류와 끝만 알림
     error(text) {
       root?.classList.add('failed');
-      if (msg) msg.textContent = text;
+      if (msg) { msg.setAttribute('aria-live', 'assertive'); msg.textContent = text; }
     },
     done() {
       if (!root) return;

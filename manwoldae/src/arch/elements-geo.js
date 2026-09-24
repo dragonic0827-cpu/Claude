@@ -4,6 +4,7 @@
 // 재질별로 메시 하나씩만 만듭니다. 좌표는 모두 월드(또는 호출한 쪽의 로컬) 좌표를 그대로 씁니다.
 import * as THREE from 'three';
 import { rng } from '../core/textures.js';
+import { materialUsesUV, colorAttribute } from './building-geo.js';
 
 export const WHITE = new THREE.Color(1, 1, 1);
 export const clamp = (v, a, b) => (v < a ? a : v > b ? b : v);
@@ -196,7 +197,7 @@ export class Buf {
     g.setAttribute('position', new THREE.Float32BufferAttribute(this.p, 3));
     g.setAttribute('normal', new THREE.Float32BufferAttribute(this.n, 3));
     g.setAttribute('uv', new THREE.Float32BufferAttribute(this.uv, 2));
-    if (this.c) g.setAttribute('color', new THREE.Float32BufferAttribute(this.c, 3));
+    if (this.c) g.setAttribute('color', colorAttribute(this.c));
     g.setIndex(this.nv > 65535 ? new THREE.Uint32BufferAttribute(this.idx, 1) : new THREE.Uint16BufferAttribute(this.idx, 1));
     g.computeBoundingSphere();
     g.computeBoundingBox();
@@ -218,7 +219,9 @@ export class Sink {
   build(group, pickId, name = '') {
     for (const [mat, b] of this.map) {
       if (!b.idx.length) continue;
-      const mesh = new THREE.Mesh(b.geometry(), mat);
+      const geo = b.geometry();
+      if (!materialUsesUV(mat)) geo.deleteAttribute('uv');
+      const mesh = new THREE.Mesh(geo, mat);
       mesh.castShadow = mesh.receiveShadow = true;
       mesh.name = name;
       if (pickId) mesh.userData.pickId = pickId;
@@ -624,7 +627,8 @@ export function mergeElements(objects, name = 'elements') {
       ni += g.index ? g.index.count : g.attributes.position.count;
     }
     const withColor = meshes.every((m) => m.geometry.attributes.color);
-    const pos = new Float32Array(nv * 3), nor = new Float32Array(nv * 3), uv = new Float32Array(nv * 2);
+    const withUV = materialUsesUV(mat);
+    const pos = new Float32Array(nv * 3), nor = new Float32Array(nv * 3), uv = withUV ? new Float32Array(nv * 2) : null;
     const col = withColor ? new Float32Array(nv * 3) : null;
     const idx = nv > 65535 ? new Uint32Array(ni) : new Uint16Array(ni);
     const ranges = [];
@@ -638,7 +642,7 @@ export function mergeElements(objects, name = 'elements') {
         v.fromBufferAttribute(P, i).applyMatrix4(M);
         pos[k * 3] = v.x; pos[k * 3 + 1] = v.y; pos[k * 3 + 2] = v.z;
         if (N) { v.fromBufferAttribute(N, i).applyMatrix3(nm).normalize(); nor[k * 3] = v.x; nor[k * 3 + 1] = v.y; nor[k * 3 + 2] = v.z; }
-        if (U) { uv[k * 2] = U.getX(i); uv[k * 2 + 1] = U.getY(i); }
+        if (U && uv) { uv[k * 2] = U.getX(i); uv[k * 2 + 1] = U.getY(i); }
         if (col) { col[k * 3] = Cc.getX(i); col[k * 3 + 1] = Cc.getY(i); col[k * 3 + 2] = Cc.getZ(i); }
       }
       const t0 = io / 3;
@@ -654,8 +658,8 @@ export function mergeElements(objects, name = 'elements') {
     const geo = new THREE.BufferGeometry();
     geo.setAttribute('position', new THREE.BufferAttribute(pos, 3));
     geo.setAttribute('normal', new THREE.BufferAttribute(nor, 3));
-    geo.setAttribute('uv', new THREE.BufferAttribute(uv, 2));
-    if (col) geo.setAttribute('color', new THREE.BufferAttribute(col, 3));
+    if (uv) geo.setAttribute('uv', new THREE.BufferAttribute(uv, 2));
+    if (col) geo.setAttribute('color', colorAttribute(col));
     geo.setIndex(new THREE.BufferAttribute(idx, 1));
     geo.computeBoundingSphere();
     geo.computeBoundingBox();

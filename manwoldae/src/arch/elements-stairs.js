@@ -13,10 +13,10 @@ export function hashId(s = '') {
   return h >>> 0;
 }
 
-// 주칠 목난간을 다는 계단: 회경전 앞 대계단과 건덕전(문) 계단 (modelingGuide.platforms.railings)
+// 주칠 목난간은 명세에 railing: true 로 적은 계단에만 답니다 (이름으로 짐작하지 않음).
+// 『고려도경』의 "東西兩階 丹漆欄檻"은 회경전 기단 가운데 두 계단(buildings[].platformStairs)에 이미 달려 있습니다.
 export function stairHasRailing(def) {
-  if (typeof def.railing === 'boolean') return def.railing;
-  return /대계단|건덕전/.test(def.nameKo || '');
+  return def.railing === true;
 }
 
 // ─────────────────────────── 계단 ───────────────────────────

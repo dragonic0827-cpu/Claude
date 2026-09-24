@@ -1,15 +1,20 @@
 // 미니맵: spec 으로 그린 궁성 평면(음영 지형·대지·전각·담장·물길) + 카메라 위치와 시야, 해/달 방향.
-// 누르면 그곳으로 날아갑니다.
+// 누르면 그곳으로 날아갑니다. 키보드: 평면도에 초점을 두고 방향키로 표적을 옮기고(Shift 는 크게) Enter 로 이동.
 //
-// createMinimap({ spec, root, heightAt, onPick(x, z) }) → { update(camera, target, lightDir, night), setVisible(v), visible, el }
+// createMinimap({ spec, root, heightAt, onPick(x, z), onChange() }) →
+//   { update(camera, target, lightDir, night), setVisible(v), visible, collapsed, el, invalidate() }
+//   onChange: 다시 그려야 할 때(접기·펼치기·키보드 표적) — main 이 한 프레임 그리게 함
 import { h, icon } from './dom.js';
 
 const EXT = { x0: -330, x1: 200, z0: -520, z1: 300 };
 const DEG = Math.PI / 180;
 
-export function createMinimap({ spec, root, heightAt, onPick, northOffsetDeg = 17 }) {
+export function createMinimap({ spec, root, heightAt, onPick, onChange, northOffsetDeg = 17 }) {
   const W = EXT.x1 - EXT.x0, D = EXT.z1 - EXT.z0;
-  const canvas = h('canvas', { class: 'minimap-canvas', role: 'img', 'aria-label': '궁성 평면도: 누르면 그곳으로 이동합니다' });
+  const canvas = h('canvas', {
+    class: 'minimap-canvas', role: 'application', tabindex: '0', 'aria-roledescription': '평면도',
+    'aria-label': '궁성 평면도: 누르면 그곳으로 이동합니다. 방향키로 표적을 옮기고 Enter 로 이동',
+  });
   const north = h('span', { class: 'minimap-north', title: '진북 (중심축은 진북에서 서쪽으로 17°)', 'aria-hidden': 'true' }, icon('north'), h('b', {}, '北'));
   north.style.transform = `rotate(${northOffsetDeg}deg)`;
   const collapse = h('button', { class: 'btn icon-btn minimap-toggle', type: 'button', 'aria-label': '평면도 접기', 'aria-expanded': 'true' }, icon('chevronDown'));
@@ -18,15 +23,19 @@ export function createMinimap({ spec, root, heightAt, onPick, northOffsetDeg = 1
     h('div', { class: 'minimap-frame' }, canvas, north));
   root.append(el);
 
-  let visible = true, collapsed = false;
-  collapse.addEventListener('click', () => {
-    collapsed = !collapsed;
+  let visible = true, collapsed = false, byUser = false;
+  function setCollapsed(on, user = false) {
+    if (collapsed === !!on) return;
+    collapsed = !!on;
+    if (user) byUser = true;
     el.classList.toggle('collapsed', collapsed);
     collapse.setAttribute('aria-expanded', String(!collapsed));
     collapse.setAttribute('aria-label', collapsed ? '평면도 펼치기' : '평면도 접기');
     collapse.replaceChildren(icon(collapsed ? 'chevronUp' : 'chevronDown'));
-    dirty = true;
-  });
+    dirty = true; last.x = NaN;
+    onChange?.();
+  }
+  collapse.addEventListener('click', () => setCollapsed(!collapsed, true));
 
   const base = document.createElement('canvas');
   let cssW = 0, cssH = 0, dpr = 1, dirty = true;
@@ -117,12 +126,15 @@ export function createMinimap({ spec, root, heightAt, onPick, northOffsetDeg = 1
   }
 
   const last = { x: NaN, z: NaN, yaw: NaN, ex: NaN };
+  let cursor = null;       // 키보드 표적 [x, z]
+  const lastTarget = { x: 0, z: 0 };
   function update(camera, target, lightDir, night) {
+    lastTarget.x = target.x; lastTarget.z = target.z;
     if (!visible || collapsed) return;
     if (dirty && !drawBase()) return;
     const p = camera.position;
     const yaw = Math.atan2(target.x - p.x, target.z - p.z);
-    const key = (lightDir ? lightDir.x * 7 + lightDir.z * 13 : 0) + (night ? 100 : 0);
+    const key = (lightDir ? lightDir.x * 7 + lightDir.z * 13 : 0) + (night ? 100 : 0) + (cursor ? cursor[0] * 0.37 + cursor[1] * 0.71 + 1e4 : 0);
     if (Math.abs(p.x - last.x) < 0.3 && Math.abs(p.z - last.z) < 0.3 && Math.abs(yaw - last.yaw) < 0.004 && key === last.ex) return;
     last.x = p.x; last.z = p.z; last.yaw = yaw; last.ex = key;
     const g = canvas.getContext('2d');
@@ -162,6 +174,16 @@ export function createMinimap({ spec, root, heightAt, onPick, northOffsetDeg = 1
     g.arc(px, pz, 3.6, 0, Math.PI * 2);
     g.fillStyle = '#8FB8A6'; g.fill();
     g.lineWidth = 1.2; g.strokeStyle = '#15191b'; g.stroke();
+    // 키보드 표적 (십자)
+    if (cursor) {
+      const [cx, cz] = toPx(cursor[0], cursor[1]);
+      g.strokeStyle = '#f2d488'; g.lineWidth = 1.5;
+      g.beginPath();
+      g.moveTo(cx - 8, cz); g.lineTo(cx - 3, cz); g.moveTo(cx + 3, cz); g.lineTo(cx + 8, cz);
+      g.moveTo(cx, cz - 8); g.lineTo(cx, cz - 3); g.moveTo(cx, cz + 3); g.lineTo(cx, cz + 8);
+      g.stroke();
+      g.beginPath(); g.arc(cx, cz, 5.5, 0, Math.PI * 2); g.stroke();
+    }
   }
 
   function pick(e) {
@@ -172,12 +194,43 @@ export function createMinimap({ spec, root, heightAt, onPick, northOffsetDeg = 1
   }
   canvas.addEventListener('click', pick);
 
+  // 키보드: 방향키로 표적(10 m, Shift 40 m), Enter·Space 로 이동, Esc 로 표적 지우기
+  const clampX = (x) => Math.max(EXT.x0, Math.min(EXT.x1, x)), clampZ = (z) => Math.max(EXT.z0, Math.min(EXT.z1, z));
+  canvas.addEventListener('keydown', (e) => {
+    const step = e.shiftKey ? 40 : 10;
+    const mv = { ArrowLeft: [-step, 0], ArrowRight: [step, 0], ArrowUp: [0, -step], ArrowDown: [0, step] }[e.key];
+    if (mv) {
+      if (!cursor) cursor = [lastTarget.x, lastTarget.z];
+      cursor = [clampX(cursor[0] + mv[0]), clampZ(cursor[1] + mv[1])];
+      e.preventDefault(); e.stopPropagation();
+      onChange?.();
+    } else if ((e.key === 'Enter' || e.key === ' ') && cursor) {
+      e.preventDefault(); e.stopPropagation();
+      onPick?.(cursor[0], cursor[1]);
+    } else if (e.key === 'Escape' && cursor) {
+      cursor = null;
+      e.preventDefault(); e.stopPropagation();
+      onChange?.();
+    }
+  });
+  canvas.addEventListener('blur', () => { if (cursor) { cursor = null; onChange?.(); } });
+
   function setVisible(v) {
     visible = !!v;
     el.hidden = !visible;
     dirty = true; last.x = NaN;
+    onChange?.();
   }
   addEventListener('resize', () => { dirty = true; last.x = NaN; });
 
-  return { update, setVisible, get visible() { return visible; }, el, invalidate() { dirty = true; last.x = NaN; } };
+  return {
+    update, setVisible, el,
+    get visible() { return visible; },
+    get collapsed() { return collapsed; },
+    // 투어가 열리면 main 이 잠시 접음 (사용자가 직접 접고 편 적이 있으면 userTouched 로 알 수 있음)
+    setCollapsed: (on) => setCollapsed(on),
+    get userTouched() { return byUser; },
+    resetTouched() { byUser = false; },
+    invalidate() { dirty = true; last.x = NaN; },
+  };
 }

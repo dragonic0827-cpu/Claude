@@ -1,9 +1,10 @@
 // 안내 여행: spec.tour 12곳 — 제목·해설, 이전/다음, 진행 점, 자동 재생
 //
-// createTour({ spec, nav, sheet }) → { open(i?), close(), go(i, instant), next(), prev(), toggleAutoplay(), isOpen, index, update(dt) }
-import { h, icon, announce } from './dom.js';
+// createTour({ spec, nav, sheets, onOpenChange, onStop }) →
+//   { open(i?), close(), go(i, instant), next(), prev(), toggleAutoplay(), stopAutoplay(), isOpen, index, autoplay, update(dt) }
+import { h, icon, announce, nobreak } from './dom.js';
 
-export function createTour({ spec, nav, sheets, onOpenChange }) {
+export function createTour({ spec, nav, sheets, onOpenChange, onStop }) {
   const stops = (spec.tour || []).filter((s) => s && s.camera && s.target);
   const n = stops.length;
   let index = -1, open = false, autoplay = false, dwell = 0, arrived = false, flightToken = 0;
@@ -21,21 +22,21 @@ export function createTour({ spec, nav, sheets, onOpenChange }) {
   const prevBtn = h('button', { class: 'btn icon-btn', type: 'button', 'aria-label': '이전 지점 (←)', onclick: () => prev() }, icon('prev'));
   const nextBtn = h('button', { class: 'btn icon-btn', type: 'button', 'aria-label': '다음 지점 (→)', onclick: () => next() }, icon('next'));
   const playIco = h('span', { class: 'play-ico' }, icon('play'));
-  const playLabel = h('span', {}, '자동 재생');
+  const playLabel = h('span', {}, '자동 재생');   // 글은 그대로 두고 눌림 상태(aria-pressed)만 바꿈
   const playBtn = h('button', { class: 'btn text-btn', type: 'button', 'aria-pressed': 'false', onclick: () => toggleAutoplay() }, playIco, playLabel);
 
   const sheet = sheets.create('tour', {
     side: 'left', label: '안내 여행', labelledBy: 'tour-title', eyebrow: h('span', { class: 'eyebrow' }, '안내 여행 ', count),
     body: [title, text],
     footer: [dots, bar, h('div', { class: 'tour-nav' }, prevBtn, playBtn, nextBtn)],
-    onClose: () => { open = false; setAutoplay(false); onOpenChange?.(false); },
+    onClose: () => { open = false; setAutoplay(false); onOpenChange?.(false); onStop?.(null, -1); },
   });
 
   function render() {
     const s = stops[index];
     if (!s) return;
     title.textContent = s.titleKo || '';
-    text.textContent = s.textKo || '';
+    text.textContent = nobreak(s.textKo || '');
     count.textContent = `${index + 1} / ${n}`;
     dotBtns.forEach((b, i) => {
       b.classList.toggle('on', i === index);
@@ -57,7 +58,8 @@ export function createTour({ spec, nav, sheets, onOpenChange }) {
     arrived = false;
     dwell = 0;
     const token = ++flightToken;
-    const p = nav.flyTo(s.camera, s.target, { instant });
+    const p = nav.flyTo(s.camera, s.target, { instant, origin: 'tour' });
+    onStop?.(s, i);
     p.then((done) => { if (token === flightToken) arrived = true; if (!done && token === flightToken && !instant) setAutoplay(false); });
     announce(`${i + 1}번째 지점, ${s.titleKo}`);
     return p;
@@ -69,7 +71,6 @@ export function createTour({ spec, nav, sheets, onOpenChange }) {
     autoplay = !!v;
     playBtn.setAttribute('aria-pressed', String(autoplay));
     playIco.replaceChildren(icon(autoplay ? 'pause' : 'play'));
-    playLabel.textContent = autoplay ? '멈춤' : '자동 재생';
     bar.classList.toggle('on', autoplay);
     dwell = 0;
     bar.firstChild.style.transform = 'scaleX(0)';
@@ -102,6 +103,8 @@ export function createTour({ spec, nav, sheets, onOpenChange }) {
 
   return {
     go, next, prev, close, toggleAutoplay, update,
+    // 사용자가 직접 카메라를 움직이면(평면도·정보 카드·목록·휠·끌기) 자동 재생을 멈춤
+    stopAutoplay: () => { if (autoplay) setAutoplay(false); },
     open: (i) => (index < 0 ? go(i ?? 0) : (show(), render())),
     get isOpen() { return open; },
     get index() { return index; },

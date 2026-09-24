@@ -64,7 +64,23 @@ export const mq = (q) => (typeof matchMedia === 'function' ? matchMedia(q) : { m
 export const reducedMotion = () => mq('(prefers-reduced-motion: reduce)').matches;
 export const isCoarse = () => mq('(pointer: coarse)').matches;
 export const isNarrow = () => mq('(max-width: 720px)').matches;
+// 패널을 하나만 둘 만큼 좁거나 낮은 화면 (휴대폰 세로·가로)
+export const isShort = () => mq('(max-height: 560px)').matches;
+export const isCompact = () => isNarrow() || isShort();
 
+// 한국어 줄바꿈 다듬기: 숫자와 단위 사이(39.16 m), 한자 괄호와 조사 사이(火珠)가)에서 끊기지 않게
+export const nobreak = (s) => String(s ?? '')
+  .replace(/(\d) (m|cm|km|mm|㎡|㎞|°|칸|단|년|세기)(?![A-Za-z])/g, '$1\u00a0$2')
+  .replace(/\)(?=[가-힣])/g, ')\u2060');
+
+// spec 의 생성기용 메모에서 코드 식별자·좌표 괄호를 걷어 냄 (예: '(w10_gate)', '(stories=2)', '(x=-8)')
+const DEV_PAREN = /\s*\((?=[^()]*(?:[A-Za-z]\w*_\w|[A-Za-z]\s*[=≈]|\b[a-z]+[A-Z]\w*|\brank \d|\bhip\b|프레임 기준))[^()]*\)/g;
+const DEV_SENT = /[A-Za-z]\w*_\w|[A-Za-z]\s*[=≈]\s*[-+−]?\d|\brank \d/;
+export const cleanNote = (s) => String(s ?? '')
+  .replace(DEV_PAREN, '')
+  .split(/(?<=[.。])\s+/).filter((t) => !DEV_SENT.test(t)).join(' ')
+  .replace(/렌더 지형/g, '장면 지형')
+  .replace(/\s+([.,])/g, '$1').trim();
 // 신뢰도 표기
 export const CONFIDENCE = {
   확실: { cls: 'c-sure', text: '발굴·실측·원문 기록으로 확인된 내용입니다.' },
@@ -77,9 +93,14 @@ export function confidenceBadge(conf, note) {
 }
 
 export const KIND_KO = {
-  hall: '전각', gate: '문', gatehouse: '문루(2층 누문)', pavilion: '누각·정자', landmark: '유적·지점',
-  bridge: '다리', stairs: '돌계단', peak: '산',
+  hall: '전각', gate: '문', gatehouse: '문루(2층 누문)', pavilion: '누각·정자', landmark: '지점',
+  bridge: '다리', stairs: '돌계단', peak: '산', corridor: '회랑', wall: '담장', palaceWall: '궁성 성벽', cityWall: '도성 성벽',
 };
+
+// 신뢰도와 그 메모 (spec 의 모든 전각·계단·회랑·담장·다리·지점에 있음)
+export function confidenceOf(d = {}) {
+  return { confidence: d.confidence || '', note: d.confidenceNote || '' };
+}
 
 // 스크린리더 알림
 let liveEl = null;

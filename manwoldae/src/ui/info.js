@@ -1,9 +1,9 @@
-// 선택: 건물·유적·다리·계단 정보 카드 + 선택한 대상 테두리 빛(프레넬) 강조
+// 선택: 건물·지점·다리·계단·회랑·담장 정보 카드 + 선택한 대상 테두리 빛(프레넬) 강조
 //
-// createInfo({ items, sheets, onFocus }) → { select(id), clear(), current }
-//   items: Map id → { id, type: 'building'|'landmark'|'bridge'|'stairs', def, object }
+// createInfo({ items, sheets, onFocus, onChange }) → { select(id, { min }), clear(), current, refreshHighlight() }
+//   items: Map id → { id, type: 'building'|'landmark'|'bridge'|'stairs'|'corridor'|'wall', def, object, center? }
 import * as THREE from 'three';
-import { h, icon, confidenceBadge, CONFIDENCE, KIND_KO, announce } from './dom.js';
+import { h, icon, confidenceBadge, CONFIDENCE, KIND_KO, announce, nobreak, cleanNote, confidenceOf } from './dom.js';
 
 // 선택 강조: 같은 지오메트리를 가산 혼합 프레넬 셰이더로 한 번 더 (재질을 건드리지 않음)
 const RIM_VERT = /* glsl */`
@@ -67,9 +67,16 @@ function addHighlight(root) {
 }
 
 const fmt = (v, d = 1) => (Number.isFinite(v) ? (+v.toFixed(d)).toString() : '');
+// '확실(칸수)/추정(치수)' → '칸수: 확실 · 치수: 추정'
+const noteText = (n) => {
+  const parts = String(n || '').split('/').map((p) => p.trim().match(/^(확실|추정|불확실)\s*\((.+)\)$/));
+  return parts.length && parts.every(Boolean) ? parts.map((m) => `${m[2]}: ${m[1]}`).join(' · ') : String(n || '');
+};
 
 export function createInfo({ items, sheets, onFocus, onChange }) {
-  const eyebrow = h('span', { class: 'eyebrow' });
+  const eyebrowKind = h('span', {});
+  const eyebrowName = h('span', { class: 'min-name' });   // 접힌 카드에서만 보이는 이름
+  const eyebrow = h('span', { class: 'eyebrow' }, eyebrowKind, eyebrowName);
   const name = h('h2', { class: 'info-name', id: 'info-title' });
   const hanja = h('p', { class: 'info-hanja', lang: 'zh-Hant' });
   const facts = h('dl', { class: 'info-facts' });
@@ -80,7 +87,7 @@ export function createInfo({ items, sheets, onFocus, onChange }) {
   const focusBtn = h('button', { class: 'btn text-btn', type: 'button', onclick: () => current && onFocus?.(current) }, icon('fly'), h('span', {}, '가까이 가기'));
 
   sheets.create('info', {
-    side: 'right', label: '정보', labelledBy: 'info-title', eyebrow,
+    side: 'right', label: '정보 카드', labelledBy: 'info-title', eyebrow,
     body: [name, hanja, facts, conf, desc, notes],
     footer: [h('div', { class: 'info-actions' }, focusBtn)],
     onClose: () => clear(true),
@@ -95,44 +102,55 @@ export function createInfo({ items, sheets, onFocus, onChange }) {
 
   function fill(it) {
     const d = it.def || {};
-    const kind = it.type === 'building' ? KIND_KO[d.kind] || '전각' : KIND_KO[it.type] || '';
-    eyebrow.textContent = kind;
+    const kind = it.type === 'building' ? KIND_KO[d.kind] || '전각'
+      : it.type === 'wall' ? KIND_KO[d.kind === 'palace' ? 'palaceWall' : d.kind === 'city' ? 'cityWall' : 'wall']
+        : KIND_KO[it.type] || '';
+    eyebrowKind.textContent = kind;
+    eyebrowName.textContent = ` · ${d.nameKo || d.id}`;
     name.textContent = d.nameKo || d.id;
     hanja.textContent = d.nameHanja || '';
     hanja.hidden = !d.nameHanja;
     facts.replaceChildren();
     if (it.type === 'building') {
       if (d.baysFront && d.baysSide) fact('칸 수', `정면 ${d.baysFront}칸 × 측면 ${d.baysSide}칸${d.stories === 2 ? ' · 2층' : ''}`);
-      if (d.columnSpanW && d.columnSpanD) fact('기둥 간 너비', `${fmt(d.columnSpanW)} m × ${fmt(d.columnSpanD)} m`);
-      if (d.renamedTo) fact('1138년 개칭', d.renamedTo);
+      if (d.columnSpanW && d.columnSpanD) fact('평면(기둥 중심)', `${fmt(d.columnSpanW, 2)} m × ${fmt(d.columnSpanD, 2)} m`);
+      if (d.renamedTo) fact('뒤의 이름', d.renamedTo);
     } else if (it.type === 'stairs') {
       if (d.steps) fact('단 수', `${d.steps}단`);
-      if (Number.isFinite(d.topY) && Number.isFinite(d.bottomY)) fact('높이', `${fmt(d.topY - d.bottomY)} m`);
-      if (d.width) fact('너비', `${fmt(d.width)} m`);
+      const hgt = Number.isFinite(d.recordedHeight) ? d.recordedHeight : Number.isFinite(d.topY) && Number.isFinite(d.bottomY) ? d.topY - d.bottomY : NaN;
+      if (Number.isFinite(hgt)) fact('높이', `${fmt(hgt, 2)} m`);
+      if (d.width) fact('너비', `${fmt(d.width, 2)} m`);
     } else if (it.type === 'bridge') {
       if (d.length && d.width) fact('크기', `길이 ${fmt(d.length)} m × 너비 ${fmt(d.width)} m`);
     } else if (it.type === 'landmark' && d.dims) {
       if (d.dims.w && d.dims.h) fact('크기', `한 변 ${fmt(d.dims.w)} m · 높이 ${fmt(d.dims.h)} m`);
+    } else if (it.type === 'wall') {
+      if (d.height) fact('높이', `${fmt(d.height)} m${d.thickness ? ` · 두께 ${fmt(d.thickness)} m` : ''}`);
+    } else if (it.type === 'corridor') {
+      if (d.width) fact('너비', `${fmt(d.width)} m${d.double ? ' · 복랑(두 줄)' : ''}`);
     }
     facts.hidden = !facts.children.length;
     conf.replaceChildren();
-    if (d.confidence) {
-      const c = CONFIDENCE[d.confidence];
-      conf.append(confidenceBadge(d.confidence, d.confidenceNote), h('span', { class: 'conf-text' }, c ? c.text : ''));
-      if (d.confidenceNote) conf.append(h('span', { class: 'conf-note' }, d.confidenceNote));
+    const cf = confidenceOf(d);
+    if (cf.confidence) {
+      const c = CONFIDENCE[cf.confidence];
+      // 부분마다 신뢰도가 다르면(예: 칸수 확실 / 치수 추정) 일반 설명 대신 그 메모를 보임
+      conf.append(confidenceBadge(cf.confidence, cf.note), h('span', { class: 'conf-text' }, cf.note ? noteText(cf.note) : c ? c.text : ''));
     }
-    conf.hidden = !d.confidence;
-    const description = d.descriptionKo || (it.type === 'stairs' ? d.notes : '') || '';
-    desc.textContent = description;
+    conf.hidden = !cf.confidence;
+    // 고증 메모: 독자용 notesKo 가 있으면 그것, 없으면 생성기 메모에서 코드 식별자를 걷어 냄
+    const note = cleanNote(d.notesKo ?? d.notes);
+    const description = d.descriptionKo || (it.type === 'stairs' ? note : '') || '';
+    desc.textContent = nobreak(description);
     desc.hidden = !description;
-    const noteText = it.type === 'stairs' ? '' : d.notes || '';
-    notesBody.textContent = noteText;
-    notes.hidden = !noteText;
+    const more = it.type === 'stairs' && !d.descriptionKo ? '' : note;
+    notesBody.textContent = nobreak(more);
+    notes.hidden = !more;
     notes.open = false;
-    focusBtn.hidden = !(it.object || Number.isFinite(d.cx ?? d.x));
+    focusBtn.hidden = !(it.object || it.center || Number.isFinite(d.cx ?? d.x));
   }
 
-  function select(id) {
+  function select(id, o = {}) {
     const it = items.get(id);
     if (!it) { clear(); return false; }
     if (current !== it) {
@@ -141,7 +159,7 @@ export function createInfo({ items, sheets, onFocus, onChange }) {
     }
     current = it;
     fill(it);
-    sheets.open('info');
+    sheets.open('info', { min: !!o.min, focus: o.focus });
     announce(`${it.def?.nameKo || id} 정보`);
     onChange?.(it);
     return true;

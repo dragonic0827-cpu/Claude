@@ -1,6 +1,6 @@
 // 지형 — 송악산·구릉·하천·연못과 대지(축대)
 //
-// createTerrain(spec, mats) → { group, heightAt, groundAt, naturalAt, isOnTerrace, setPaving, setRuins, info }
+// createTerrain(spec, mats, { yieldFrame }?) → (yieldFrame 이 있으면 Promise) { group, heightAt, groundAt, naturalAt, isOnTerrace, setPaving, setRuins, info }
 //   heightAt(x,z)   걸을 수 있는 면: 대지 윗면 > 계단 경사 > 다리 상판 > 렌더된 지형
 //   groundAt(x,z)   렌더된 지형 메시와 같은 보간(대지 무시, 궁성 안 물길은 바닥)
 //   naturalAt(x,z)  평탄화 전 원지형(DEM + 세부 기복)
@@ -240,7 +240,7 @@ function getMaterials(mats) {
     topBrick: topClone(new THREE.MeshStandardMaterial({ map: brickPavingTexture(P.brickGray || '#6F6D69'), roughness: 0.9 })),
     // 유적 보기: 오늘의 만월대처럼 풀이 덮인 대지 윗면 (약간 누렇고 어둡게)
     topGrass: (() => { const m = topClone(mats.grass); m.color = new THREE.Color(0.9, 0.9, 0.82); return m; })(),
-    rock: (() => { const m = mats.outcrop.clone(); m.flatShading = true; return m; })(),
+    rock: mats.outcrop.clone(),   // 괴석: 반쯤 부드러운 법선 (rockGeometry)
   };
   cache.set(mats, M);
   return M;
@@ -336,15 +336,36 @@ function subtractShape(poly, S) {
 }
 
 // ─────────────────────────── 본체 ───────────────────────────
-export function createTerrain(spec, mats) {
+export function createTerrain(spec, mats, opts = {}) {
+  const it = terrainStages(spec, mats);
+  if (typeof opts.yieldFrame !== 'function') {
+    let r = it.next();
+    while (!r.done) r = it.next();
+    return r.value;
+  }
+  // opts.yieldFrame 이 있으면 단계마다 한 프레임 양보해 불러오기 화면이 멈추지 않게 함 (Promise 를 돌려줌 — main.js 는 await)
+  return (async () => {
+    let r = it.next();
+    while (!r.done) { await opts.yieldFrame(); r = it.next(); }
+    return r.value;
+  })();
+}
+
+// 지형 만들기 본체: 단계(mark)마다 yield 하는 생성기. 기다린 시간은 단계 시간·buildMs 에서 뺌
+function* terrainStages(spec, mats) {
   const t0 = performance.now();
   const stage = {};
-  let tLast = t0;
+  let tLast = t0, waited = 0;
   const mark = (k) => { const t = performance.now(); stage[k] = Math.round(t - tLast); tLast = t; };
+  const resume = () => { const t = performance.now(); waited += t - tLast; tLast = t; };
   const model = createHeightModel(spec);
   mark('model');
+  yield 'model';
+  resume();
   const M = getMaterials(mats);
   mark('mats');
+  yield 'mats';
+  resume();
   const P = mats.palette || {};
   const problems = model.problems.slice();
   const group = new THREE.Group();
@@ -428,6 +449,8 @@ export function createTerrain(spec, mats) {
 
   // ── 격자 단 높이 (거친 단부터; 고운 단의 바깥 띠는 거친 단 보간면으로) ──
   mark('setup');
+  yield 'setup';
+  resume();
   const levels = LEVELS.map((L) => ({ ...L, nx: Math.round((L.x1 - L.x0) / L.cell) + 1, nz: Math.round((L.z1 - L.z0) / L.cell) + 1 }));
   const bilin = (Lv, arr, x, z) => {
     let fx = (x - Lv.x0) / Lv.cell, fz = (z - Lv.z0) / Lv.cell;
@@ -464,6 +487,8 @@ export function createTerrain(spec, mats) {
     }
   }
   mark('heights');
+  yield 'heights';
+  resume();
   // 잘려 나가는 격자점 표시 (법선을 한쪽 차분으로)
   for (const Lv of levels) {
     Lv.cut = new Uint8Array(Lv.nx * Lv.nz);
@@ -605,6 +630,8 @@ export function createTerrain(spec, mats) {
   }
 
   mark('normals');
+  yield 'normals';
+  resume();
   // ── 지형 메시 조립 ──
   const tp = [], tn = [], tc = [], tf = [], ti = [];
   let nv = 0;
@@ -671,6 +698,8 @@ export function createTerrain(spec, mats) {
     }
   });
   mark('mesh');
+  yield 'mesh';
+  resume();
   const tgeo = new THREE.BufferGeometry();
   tgeo.setAttribute('position', new THREE.Float32BufferAttribute(tp, 3));
   tgeo.setAttribute('normal', new THREE.Float32BufferAttribute(tn, 3));
@@ -703,6 +732,8 @@ export function createTerrain(spec, mats) {
   }
 
   mark('geo');
+  yield 'geo';
+  resume();
   // ── 대지: 윗면·축대·갑석 ──
   const TER = model.terraces;
   const EQ = 0.02;
@@ -868,6 +899,8 @@ export function createTerrain(spec, mats) {
   }
 
   mark('walls');
+  yield 'walls';
+  resume();
   // ── 물 리본 (모든 물길) ──
   const waterUV = (x, z) => [x / 14, z / 14];
   const streamWaterY = model.streams.map((st) => st.wy.slice());
@@ -1016,6 +1049,8 @@ export function createTerrain(spec, mats) {
   }
 
   mark('water');
+  yield 'water';
+  resume();
   // ── 메시 추가 ──
   const addMesh = (tris, mat, name, shadow = true) => {
     if (!tris.count) return null;
@@ -1072,7 +1107,7 @@ export function createTerrain(spec, mats) {
     tris += o.isInstancedMesh ? n * o.count : n;
   });
   const info = {
-    buildMs: Math.round(performance.now() - t0),
+    buildMs: Math.round(performance.now() - t0 - waited),
     stageMs: stage,
     triangles: Math.round(tris),
     groundTriangles: ti.length / 3,
@@ -1086,7 +1121,7 @@ export function createTerrain(spec, mats) {
   return { group, heightAt, groundAt, naturalAt, isOnTerrace, setPaving, setRuins, model, info };
 }
 
-// 괴석: 울퉁불퉁한 다면체 (결정적)
+// 괴석: 울퉁불퉁한 다면체 (결정적). 법선은 면 법선과 중심에서 바깥 방향을 반씩 섞어 모서리 느낌만 남김
 function rockGeometry(seed) {
   const g = new THREE.IcosahedronGeometry(1, 1);
   const pos = g.attributes.position;
@@ -1105,5 +1140,11 @@ function rockGeometry(seed) {
     pos.setXYZ(i, v.x, v.y, v.z);
   }
   g.computeVertexNormals();
+  const nor = g.attributes.normal, n = new THREE.Vector3();
+  for (let i = 0; i < pos.count; i++) {
+    v.fromBufferAttribute(pos, i).normalize();
+    n.fromBufferAttribute(nor, i).lerp(v, 0.5).normalize();
+    nor.setXYZ(i, n.x, n.y, n.z);
+  }
   return g;
 }

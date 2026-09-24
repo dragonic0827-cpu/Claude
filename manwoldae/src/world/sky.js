@@ -1,14 +1,16 @@
 // 하늘·해/달·안개·조명·그림자 — 시간대 4가지(팔관회 아침 / 한낮 / 해질녘 / 보름달 밤)
 //
 // createEnvironment(renderer, scene, { spec, camera, shadowMapSize })
-//   → { setTime(name, { instant }), update(dt, camera, target), sun, hemi, presets, current,
-//       keyDirection, moonDirection, invalidateShadows(), setShadows({ enabled, mapSize }), dispose() }
+//   → { setTime(name, { instant }), update(dt, camera, target), sun, hemi, presets[{ name, label, subtitle, night }], current,
+//       keyDirection, moonDirection, invalidateShadows(), setShadows({ enabled, mapSize }), shadowMapSize, dispose() }
 //
 // - 낮 하늘은 three 의 Sky(Preetham 모형), 밤은 그 위에 달·달무리·별을 그리는 반투명 돔을 겹칩니다.
 // - 해 방위는 spec.modelingGuide.lighting 규칙: 진방위 A → PLAN 수평 방향 (sin(A+17°), −cos(A+17°)).
 //   17° 는 spec.meta.trueNorthInPlan 에서 다시 계산해 부호를 확인합니다.
 // - 그림자 카메라는 보는 곳(target)을 따라다니고, 그림자 텍셀 격자에 맞춰 움직여 반짝임을 막습니다.
 //   정적인 장면이라 그림자 맵은 빛·상자가 바뀔 때만 다시 그립니다(renderer.shadowMap.autoUpdate = false).
+//   상자는 원하는 중심이 지금 중심에서 0.15·half 넘게 벗어날 때만 옮깁니다 — 제자리에서 돌려 보기만 해서는 다시 그리지 않음.
+// - 환경맵은 하늘 장면을 큐브 카메라로 찍어 같은 PMREM 표적에 다시 구우므로(할당·셰이더 재검사 없음) 전환 중에도 가볍습니다.
 // - 안개 색은 카메라가 보는 방향의 지평선 하늘색(톤매핑 후 화면색)과 같게 맞춥니다.
 import * as THREE from 'three';
 import { Sky } from 'three/addons/objects/Sky.js';
@@ -33,7 +35,8 @@ function solarPosition(latDeg, dayOfYear, solarHour) {
 }
 
 // ─────────────── 시간대 ───────────────
-// key = 그림자를 드리우는 빛(낮: 해, 밤: 달), skySun = Sky 셰이더의 해. 색은 선형 sRGB 헥스.
+// key = 그림자를 드리우는 빛(낮: 해, 밤: 달), skySun = Sky 셰이더의 해. 색은 선형 sRGB 헥스. label = 화면에 쓰는 이름(키와 다를 때).
+// 낮의 채움빛(hemi·env)은 밝은 뜰·흙바닥에서 튀어 오는 빛을 흉내 내어, 그늘진 기둥·공포 밑면(황단)도 붉은빛을 잃지 않게 함.
 function makePresets(lat) {
   const winter = solarPosition(lat, 349, 9.6);    // 12월 15일 무렵(음력 11월 보름 팔관회) 오전 9시 반~10시
   const summer = solarPosition(lat, 172, 12.6);   // 하지 무렵 한낮(12시 반)
@@ -41,30 +44,31 @@ function makePresets(lat) {
   const moon = { az: 133, alt: 16 };               // 여름 보름달: 남동쪽 하늘에 떠오른 만월 (적위 약 −20°)
   return {
     '팔관회 아침': {
-      subtitle: '초겨울 오전 10시 · 남동쪽 낮은 햇빛',
+      subtitle: '동짓달 오전 · 남동쪽 낮은 햇빛',
       key: winter, skySun: winter, night: 0,
       turbidity: 2.0, rayleigh: 1.9, mie: 0.0028, mieG: 0.82, skyGain: 0.86,
-      lightColor: '#ffe0bd', lightIntensity: 4.6,
-      hemiSky: '#bcd0ea', hemiGround: '#6b5a44', hemiIntensity: 0.26,
-      envIntensity: 0.36, envGround: [0.075, 0.064, 0.05],
-      exposure: 0.5, fogDensity: 0.00034, stars: 0,
+      lightColor: '#ffe0bd', lightIntensity: 3.9,
+      hemiSky: '#c4d0e0', hemiGround: '#a89478', hemiIntensity: 1.05,
+      envIntensity: 0.85, envGround: [0.22, 0.19, 0.15],
+      exposure: 0.52, fogDensity: 0.00034, stars: 0,
     },
     '한낮': {
       subtitle: '여름 한낮 · 높이 뜬 해',
       key: summer, skySun: summer, night: 0,
       turbidity: 3.6, rayleigh: 1.6, mie: 0.0038, mieG: 0.8, skyGain: 0.84,
-      lightColor: '#fff3e2', lightIntensity: 5.2,
-      hemiSky: '#dfe5ec', hemiGround: '#7a6a50', hemiIntensity: 0.26,
-      envIntensity: 0.3, envGround: [0.11, 0.098, 0.074],
-      exposure: 0.46, fogDensity: 0.00032, stars: 0,
+      lightColor: '#fff3e2', lightIntensity: 4.3,
+      hemiSky: '#dfe3e8', hemiGround: '#b4a282', hemiIntensity: 0.95,
+      envIntensity: 0.75, envGround: [0.27, 0.24, 0.19],
+      exposure: 0.43, fogDensity: 0.00032, stars: 0,
     },
     '해질녘': {
+      label: '해 질 녘',
       subtitle: '가을 해 질 녘 · 서남서로 지는 해',
       key: autumn, skySun: autumn, night: 0,
       turbidity: 6.5, rayleigh: 2.8, mie: 0.006, mieG: 0.86, skyGain: 1.0,
       lightColor: '#ffa45e', lightIntensity: 4.4,
-      hemiSky: '#b7b2d2', hemiGround: '#5a4232', hemiIntensity: 0.34,
-      envIntensity: 0.5, envGround: [0.05, 0.034, 0.024],
+      hemiSky: '#b7b2d2', hemiGround: '#6e5040', hemiIntensity: 0.48,
+      envIntensity: 0.6, envGround: [0.09, 0.065, 0.045],
       exposure: 0.62, fogDensity: 0.00038, stars: 0,
     },
     '보름달 밤': {
@@ -400,6 +404,8 @@ export function createEnvironment(renderer, scene, opts = {}) {
   // ── 환경맵(PMREM): 하늘 + 땅 반사색 원판 ──
   const pmrem = new THREE.PMREMGenerator(renderer);
   const envScene = new THREE.Scene();
+  const cubeRT = new THREE.WebGLCubeRenderTarget(256, { type: THREE.HalfFloatType, generateMipmaps: false });
+  const cubeCam = new THREE.CubeCamera(0.5, 6000, cubeRT);
   const envSky = new THREE.Mesh(box, skyMat);
   const envNight = new THREE.Mesh(box, nightMat);
   envNight.renderOrder = 1;
@@ -475,12 +481,12 @@ export function createEnvironment(renderer, scene, opts = {}) {
     skyMat.uniforms.sunDisk.value = 0;
     nightU.uDisk.value = 0;
     envNight.visible = S.night > 0.002;
-    const rt = pmrem.fromScene(envScene, 0, 0.5, 6000);
+    cubeCam.update(renderer, envScene);
+    // 처음 한 번만 표적을 만들고, 그다음부터는 같은 표적에 다시 구움 → scene.environment 텍스처가 그대로라 재질 셰이더 재검사 없음
+    envRT = pmrem.fromCubemap(cubeRT.texture, envRT);
     skyMat.uniforms.sunDisk.value = 1;
     nightU.uDisk.value = 1;
-    scene.environment = rt.texture;
-    if (envRT) envRT.dispose();
-    envRT = rt;
+    if (scene.environment !== envRT.texture) scene.environment = envRT.texture;
   }
 
   // 카메라가 보는 방향 지평선의 화면색 → 안개 색
@@ -512,11 +518,11 @@ export function createEnvironment(renderer, scene, opts = {}) {
   }
 
   // ── 그림자 상자: 보는 곳을 따라, 텍셀 격자에 맞춰 ──
-  const shadowState = { cx: NaN, cy: NaN, cz: NaN, half: 0, halfV: 0, key: new THREE.Vector3(), since: 0 };
+  const shadowState = { cx: NaN, cy: NaN, cz: NaN, half: 0, halfV: 0, key: new THREE.Vector3() };
   const lookM = new THREE.Matrix4();
   const ax = new THREE.Vector3(), ay = new THREE.Vector3(), az = new THREE.Vector3();
   const center = new THREE.Vector3();
-  function updateShadow(camera, target, moving) {
+  function updateShadow(camera, target) {
     if (!sun.castShadow) return;
     const dist = camera.position.distanceTo(target);
     const half = dist < 260 ? 175 : dist < 650 ? 300 : 520;
@@ -535,13 +541,12 @@ export function createEnvironment(renderer, scene, opts = {}) {
     const tx = (2 * half) / sun.shadow.mapSize.x, ty = (2 * halfV) / sun.shadow.mapSize.y;
     let px = center.dot(ax), py = center.dot(ay);
     const pz = center.dot(az);
+    // 같은 크기·빛이고 원하는 중심이 지금 상자 중심 가까이(0.15·half)면 그대로 — 돌려 보기·작은 이동으로는 다시 그리지 않음
+    const hold = half === shadowState.half && Math.abs(halfV - shadowState.halfV) < 0.05 * half && shadowState.key.equals(keyDir)
+      && Math.abs(px - shadowState.cx) < 0.15 * half && Math.abs(py - shadowState.cy) < 0.15 * halfV && Math.abs(pz - shadowState.cz) < 30;
+    if (hold) return;
     px = Math.round(px / tx) * tx;
     py = Math.round(py / ty) * ty;
-    const changed = px !== shadowState.cx || py !== shadowState.cy || half !== shadowState.half
-      || Math.abs(halfV - shadowState.halfV) > 1e-3 || !shadowState.key.equals(keyDir) || Math.abs(pz - shadowState.cz) > 30;
-    shadowState.since += 1;
-    if (!changed && !(moving && shadowState.since > 18)) return;
-    shadowState.since = 0;
     shadowState.cx = px; shadowState.cy = py; shadowState.cz = pz; shadowState.half = half; shadowState.halfV = halfV;
     shadowState.key.copy(keyDir);
     center.copy(ax).multiplyScalar(px).addScaledVector(ay, py).addScaledVector(az, pz);
@@ -577,7 +582,7 @@ export function createEnvironment(renderer, scene, opts = {}) {
       regenEnv();
     } else {
       copyMix(A, S, S, 1);
-      tr = { t0: now(), dur: o.duration ?? 1500, lastEnv: now() };
+      tr = { t0: now(), dur: o.duration ?? 1500, env: 0 };
     }
     renderer.shadowMap.needsUpdate = true;
     return current;
@@ -595,7 +600,8 @@ export function createEnvironment(renderer, scene, opts = {}) {
       const e = t < 0.5 ? 4 * t * t * t : 1 - Math.pow(-2 * t + 2, 3) / 2;
       copyMix(S, A, B, e);
       apply();
-      if (t >= 1) { tr = null; regenEnv(); } else if (now() - tr.lastEnv > 180) { regenEnv(); tr.lastEnv = now(); }
+      // 환경맵은 전환 중 두 번(1/3·2/3)과 끝에서만 다시 구움 (세기는 environmentIntensity 로 매 프레임 보간)
+      if (t >= 1) { tr = null; regenEnv(); } else if (t >= (tr.env + 1) / 3) { regenEnv(); tr.env++; }
       busy = true;
     }
     if (camera) {
@@ -603,7 +609,7 @@ export function createEnvironment(renderer, scene, opts = {}) {
         camera.getWorldDirection(camFallback);
         target = camFallback.multiplyScalar(60).add(camera.position);
       }
-      updateShadow(camera, target, !!opts.moving);
+      updateShadow(camera, target);
       updateFog(camera);
       stars.position.copy(camera.position);
       const R = Math.min(camera.far * 0.92, 20000);
@@ -614,7 +620,7 @@ export function createEnvironment(renderer, scene, opts = {}) {
   }
 
   function setShadows({ enabled, mapSize: ms } = {}) {
-    if (typeof enabled === 'boolean') sun.castShadow = enabled;
+    if (typeof enabled === 'boolean') { sun.castShadow = enabled; if (enabled) shadowState.half = 0; }
     if (ms && ms !== sun.shadow.mapSize.x) {
       const n = Math.min(ms, renderer.capabilities.maxTextureSize || 4096);
       sun.shadow.mapSize.set(n, n);
@@ -626,7 +632,8 @@ export function createEnvironment(renderer, scene, opts = {}) {
 
   const env = {
     sun, hemi, sky, stars, fog,
-    presets: names.map((n) => ({ name: n, subtitle: PRESETS[n].subtitle, night: !!PRESETS[n].night })),
+    presets: names.map((n) => ({ name: n, label: PRESETS[n].label || n, subtitle: PRESETS[n].subtitle, night: !!PRESETS[n].night })),
+    get shadowMapSize() { return sun.shadow.mapSize.x; },
     get current() { return current; },
     get transitioning() { return !!tr; },
     get version() { return version; },
@@ -637,6 +644,7 @@ export function createEnvironment(renderer, scene, opts = {}) {
     setTime,
     update,
     setMoving(v) { opts.moving = v; },
+    // 그림자 맵을 다음 프레임에 다시 그림 (보이는 물체·LOD 단계가 바뀌었을 때, GL 문맥을 되찾았을 때)
     invalidateShadows() { renderer.shadowMap.needsUpdate = true; },
     setShadows,
     // 개발용: 현재 시간대 값을 바꿔 바로 적용 (예: env.tune({ exposure: 0.5 }))
@@ -647,6 +655,7 @@ export function createEnvironment(renderer, scene, opts = {}) {
     },
     dispose() {
       if (envRT) envRT.dispose();
+      cubeRT.dispose();
       pmrem.dispose();
       box.dispose(); skyMat.dispose(); nightMat.dispose(); stars.geometry.dispose(); stars.material.dispose();
       envGround.geometry.dispose(); envGroundMat.dispose();

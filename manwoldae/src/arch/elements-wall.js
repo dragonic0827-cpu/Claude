@@ -1,5 +1,7 @@
 // 성벽·담장 — 궁성(판축 토성 + 1 m 석축, 비탈진 면), 궁장(화강암 아랫단 + 회벽 + 기와 지붕 덮개),
-// 황성·나성(토석 혼축, 흙길 윗면). 문(gate/gatehouse) 기단에서 끊고, 물길(waterGates)에는 석축 수구를 둡니다.
+// 황성·나성(토석 혼축, 흙길 윗면). 문(gate/gatehouse) 기단에서 끊습니다.
+// 물길(waterGates)에서는 벽을 끊지 않고 화강암 홍예 수문 위로 그대로 넘깁니다(오간수문처럼). 홍예는 물길 방향을 따라
+// 비스듬히 뚫고, 바깥 홍예의 끝이 석축 물길의 호안 벽과 맞게 칸을 나눕니다. 수문 구간의 벽 윗선은 양쪽 둑 높이를 잇습니다.
 import * as THREE from 'three';
 import { Sink, box, worldUV, elementMats, clamp, lerp, v2, miterVec, segProj, orientedRect, clipSegRect, sweep, capSection } from './elements-geo.js';
 import SPEC from '../data/spec.js';   // ctx.buildings 가 없을 때 기본값
@@ -47,7 +49,6 @@ export function createWall(def, mats, heightAt, ctx = {}) {
       if (!best || best.d > 30) continue;
       const s = cum[best.i] + best.t * (cum[best.i + 1] - cum[best.i]);
       const w = wg.width > 0 ? wg.width : 6;
-      ex.push([s - w / 2, s + w / 2, 'water']);
       wgs.push({ s, w, wg });
     }
     ex.sort((a, b) => a[0] - b[0]);
@@ -84,6 +85,48 @@ export function createWall(def, mats, heightAt, ctx = {}) {
   const { cum, merged, wgs } = info;
   const Ltot = cum[cum.length - 1];
 
+  // ── 수구(水口) 배치: 물길 방향·수면, 홍예 칸, 벽이 넘어가는 구간 ──
+  const streams = ctx.streams || SPEC.terrain?.streams || [];
+  const gates = wgs.map(({ s, w, wg }) => {
+    const pa = pointAt(path, cum, s);
+    const t = pa.t;
+    const n = v2.left(t);                                    // 벽 법선 (수평)
+    // 물길: 가장 가까운 선분의 방향과 수면
+    let ds = n, wy = null, sw = Math.max(2, w - 2);
+    const st = streams.find((q) => q.id === wg.streamId && q.path?.length > 1);
+    if (st) {
+      let best = null;
+      for (let i = 0; i < st.path.length - 1; i++) {
+        const pr = segProj(pa.p, st.path[i], st.path[i + 1]);
+        if (!best || pr.d < best.d) best = { ...pr, i };
+      }
+      ds = v2.norm(v2.sub(st.path[best.i + 1], st.path[best.i]));
+      const wys = st.waterY;
+      if (Array.isArray(wys) && wys.length === st.path.length) wy = lerp(wys[best.i], wys[best.i + 1], best.t);
+      sw = st.width || sw;
+    }
+    if (v2.dot(ds, n) < 0) ds = v2.mul(ds, -1);
+    const sinT = clamp(Math.abs(v2.dot(ds, n)), 0.35, 1);    // 벽과 물길이 만나는 각의 sin
+    // 홍예 칸: 바깥 홍예 끝 = 호안 벽 안쪽 면(물길 중심에서 폭/2 + 0.5)
+    const pier = 0.8;
+    const open = (2 * (sw / 2 + 0.5)) / sinT;
+    const N = Math.max(1, Math.round((open + pier) / (2.7 + pier)));
+    const span = (open - (N - 1) * pier) / N;
+    const endPier = Math.max(1.4, 1.2 / sinT + 0.3);          // 호안 윗돌이 끝 기둥 안에 묻히게
+    const Lg = open + 2 * endPier;
+    // 물 높이: 명세 수면(없으면 지면 표본의 최저)
+    const samples = [];
+    for (let k = -4; k <= 4; k++) { const q = v2.madd(pa.p, t, (k / 4) * (Lg / 2)); samples.push(H(q[0], q[1])); }
+    const yBed = wy !== null ? wy - 0.6 : Math.min(...samples);
+    const R = Lg / 2 + 2.5;                                   // 벽 윗선을 둑과 둑 사이 직선으로 잇는 구간
+    const yL = H(...pointAt(path, cum, clamp(s - R, 0, Ltot)).p), yR = H(...pointAt(path, cum, clamp(s + R, 0, Ltot)).p);
+    const yS = yBed + 0.35, ra = span / 2;
+    const yT = Math.max(yS + ra + 0.38 + 0.45, yBed + 2.6);    // 홍예석 위로 0.45 m 돌 몸
+    return { s, pa, t, n, ds, sinT, N, span, pier, Lg, R, yL, yR, yBed, yS, ra, yT };
+  });
+  // 수구 구간의 벽: 윗선(y0)은 양쪽 둑을 잇고, 수문 위에서는 밑(yb)을 수문 윗돌 위로
+  const gateAt = (s) => gates.find((g) => Math.abs(s - g.s) <= g.R + 1e-6);
+
   // 남는 구간
   const spans = [];
   if (closed) spans.push([0, Ltot]);
@@ -107,17 +150,19 @@ export function createWall(def, mats, heightAt, ctx = {}) {
   // 단면
   const bat = kind === 'palace' ? 0.2 : 0.225;   // 한쪽 기울기(윗폭 = T·(1 − 2·bat))
   const hw = (z) => T / 2 - bat * T * (z / h);
-  const profile = (y0, yb) => {
+  // ys: 석축(아랫단) 윗면 높이 (기본 y0 + 1 m, 수문 위에서는 수문 윗돌 위 0.6 m)
+  const profile = (y0, yb, ys = y0 + 1) => {
     if (kind === 'palace') {
+      const zs = ys - y0;
       const P = [
         { d: hw(yb - y0) + 0.08, y: yb, tag: 'stone' },
-        { d: hw(1) + 0.08, y: y0 + 1, tag: 'stoneTop' },
-        { d: hw(1), y: y0 + 1, tag: 'earth' },
+        { d: hw(zs) + 0.08, y: ys, tag: 'stoneTop' },
+        { d: hw(zs), y: ys, tag: 'earth' },
         { d: hw(h), y: y0 + h, tag: 'top' },
         { d: 0, y: y0 + h + 0.12, tag: 'top' },
         { d: -hw(h), y: y0 + h, tag: 'earth' },
-        { d: -hw(1), y: y0 + 1, tag: 'stoneTop' },
-        { d: -hw(1) - 0.08, y: y0 + 1, tag: 'stone' },
+        { d: -hw(zs), y: ys, tag: 'stoneTop' },
+        { d: -hw(zs) - 0.08, y: ys, tag: 'stone' },
         { d: -hw(yb - y0) - 0.08, y: yb, tag: null },
       ];
       return { P, caps: [{ idx: [0, 1, 2, 6, 7, 8], buf: bStone }, { idx: [2, 3, 4, 5, 6], buf: bEarth }] };
@@ -185,6 +230,13 @@ export function createWall(def, mats, heightAt, ctx = {}) {
     const secs = [];
     const stops = [sa];
     for (let i = 1; i < cum.length - 1; i++) if (cum[i] > sa + 0.05 && cum[i] < sb - 0.05) stops.push(cum[i]);
+    // 수구: 둑 구간 끝과 수문 양 끝(바로 안쪽·바깥쪽)에 단면을 둠
+    for (const g of gates) {
+      for (const q of [g.s - g.R, g.s - g.Lg / 2 - 0.06, g.s - g.Lg / 2, g.s + g.Lg / 2, g.s + g.Lg / 2 + 0.06, g.s + g.R]) {
+        if (q > sa + 0.05 && q < sb - 0.05) stops.push(q);
+      }
+    }
+    stops.sort((a, b) => a - b);
     stops.push(sb);
     const stations = [];
     for (let k = 0; k < stops.length - 1; k++) {
@@ -203,7 +255,7 @@ export function createWall(def, mats, heightAt, ctx = {}) {
       if (vi > 0 && vi < cum.length - 1 && !isEnd) m = miterVec(segDir(path, vi - 1), segDir(path, vi), 1.8);
       else if (closed && (vi === 0 || vi === cum.length - 1)) m = miterVec(segDir(path, path.length - 2), segDir(path, 0), 1.8);
       const mn = v2.norm(m);
-      let y0, yb;
+      let y0, yb, ys;
       if (follow) {
         const yc = H(pa.p[0], pa.p[1]);
         const foot = T / 2 + 0.4;
@@ -215,7 +267,17 @@ export function createWall(def, mats, heightAt, ctx = {}) {
         y0 = def.groundY;
         yb = y0 - 0.35;
       }
-      const pr = profile(y0, yb);
+      const g = gateAt(s);
+      if (g) {
+        // 둑과 둑을 잇는 윗선 (땅이 더 높으면 땅을 따름)
+        const f = clamp((s - (g.s - g.R)) / (2 * g.R), 0, 1);
+        y0 = Math.max(lerp(g.yL, g.yR, f), follow ? y0 - 0.3 : y0);
+        if (Math.abs(s - g.s) <= g.Lg / 2 + 1e-6) {
+          yb = g.yT + 0.22;
+          ys = Math.max(y0 + 1, yb + 0.6);
+        }
+      }
+      const pr = profile(y0, yb, ys);
       secs.push({ o: pa.p, m, prof: pr.P, caps: pr.caps, yrb: pr.yrb, y0, t: pa.t });
     }
     sweep(secs, tags, { closed: true });
@@ -237,24 +299,11 @@ export function createWall(def, mats, heightAt, ctx = {}) {
     }
   }
 
-  // ── 수구(水口): 물길 위 화강암 홍예 수문 ──
-  for (const { s, w } of wgs) {
-    const pa = pointAt(path, cum, s);
-    const t = pa.t;
-    const samples = [];
-    for (let k = -4; k <= 4; k++) {
-      const q = v2.madd(pa.p, t, (k / 4) * (w / 2 + 1));
-      samples.push(H(q[0], q[1]));
-    }
-    const yBed = Math.min(...samples);
-    const yBank = Math.max(samples[0], samples[samples.length - 1]);
-    const Lg = w + 0.7, Dg = T + 0.5;
-    const yB = yBed - 0.8, yT = Math.max(yBank + 0.62 * h, yBed + 2.6);
-    const N = Math.max(1, Math.round((w - 2) / 2.9));
-    const pier = 0.8;
-    const span = Math.min(2.6, (w - 1.6 - (N - 1) * pier) / N);
-    const ra = span / 2;
-    const yS = yBed + 0.35;
+  // ── 수구(水口): 물길 위 화강암 홍예 수문 (벽은 그 위로 넘어감) ──
+  for (const g of gates) {
+    const { pa, t, ds, N, span, pier, Lg, yBed, yS, ra, yT } = g;
+    const Dg = T + 0.7;                                     // 벽 법선 방향 두께 (벽 밑보다 양쪽 0.35 m 넓게)
+    const yB = yBed - 0.8;
     const shape = new THREE.Shape();
     shape.moveTo(-Lg / 2, yB); shape.lineTo(Lg / 2, yB); shape.lineTo(Lg / 2, yT); shape.lineTo(-Lg / 2, yT); shape.lineTo(-Lg / 2, yB);
     const centers = [];
@@ -264,15 +313,20 @@ export function createWall(def, mats, heightAt, ctx = {}) {
       hp.moveTo(c - ra, yB + 0.1); hp.lineTo(c - ra, yS); hp.absarc(c, yS, ra, Math.PI, 0, true); hp.lineTo(c + ra, yB + 0.1); hp.lineTo(c - ra, yB + 0.1);
       shape.holes.push(hp);
     }
-    const g = new THREE.ExtrudeGeometry(shape, { depth: Dg, bevelEnabled: false, curveSegments: 12 });
-    const X = new THREE.Vector3(t[0], 0, t[1]), Y = new THREE.Vector3(0, 1, 0), Z = new THREE.Vector3().crossVectors(X, Y);
-    const M = new THREE.Matrix4().makeBasis(X, Y, Z);
-    M.setPosition(pa.p[0] - Z.x * Dg / 2, 0, pa.p[1] - Z.z * Dg / 2);
+    const geo = new THREE.ExtrudeGeometry(shape, { depth: Dg, bevelEnabled: false, curveSegments: 12 });
+    // 비스듬한 틀: x = 벽 방향, y = 위, z = 물길 방향(벽 법선 성분이 1 이 되게 늘림) → 앞뒤 면은 벽과 나란하고 홍예는 물길을 따름
+    const X = new THREE.Vector3(t[0], 0, t[1]), Y = new THREE.Vector3(0, 1, 0);
+    const Zn = new THREE.Vector3().crossVectors(X, Y);
+    const Zs = new THREE.Vector3(ds[0], 0, ds[1]);
+    if (Zs.dot(Zn) < 0) Zs.negate();
+    Zs.divideScalar(Zs.dot(Zn));
+    const M = new THREE.Matrix4().makeBasis(X, Y, Zs);
+    M.setPosition(pa.p[0] - Zs.x * Dg / 2, 0, pa.p[1] - Zs.z * Dg / 2);
     const bS = sink.get(mats.stone);
-    bS.addGeometry(g, M, { uvFn: (p, n) => worldUV(p, n, [4, 2]) });
-    g.dispose();
-    // 윗돌(갑석) 띠
-    box(bS, [pa.p[0], yT + 0.12, pa.p[1]], [t[0], 0, t[1]], [0, 1, 0], [Z.x, 0, Z.z], Lg / 2 + 0.1, 0.12, Dg / 2 + 0.1, { uv: 'world', scale: [4, 2], skip: ['-y'] });
+    bS.addGeometry(geo, M, { uvFn: (p, nn) => worldUV(p, nn, [4, 2]) });
+    geo.dispose();
+    // 윗돌(갑석) 띠 — 같은 비스듬한 틀
+    box(bS, [pa.p[0], yT + 0.11, pa.p[1]], [X.x, 0, X.z], [0, 1, 0], [Zs.x, 0, Zs.z], Lg / 2 + 0.1, 0.11, Dg / 2 + 0.1, { uv: 'world', scale: [4, 2], skip: ['-y'] });
     // 홍예석 띠 (양면)
     const bG = sink.get(E.granite);
     for (const c of centers) {
@@ -282,7 +336,7 @@ export function createWall(def, mats, heightAt, ctx = {}) {
       const rg = new THREE.ExtrudeGeometry(ring, { depth: 0.05, bevelEnabled: false, curveSegments: 12 });
       for (const sd of [-1, 1]) {
         const off = sd > 0 ? Dg / 2 : -Dg / 2 - 0.05;
-        const Mr = new THREE.Matrix4().makeBasis(X, Y, Z).setPosition(pa.p[0] + Z.x * off, 0, pa.p[1] + Z.z * off);
+        const Mr = new THREE.Matrix4().makeBasis(X, Y, Zs).setPosition(pa.p[0] + Zs.x * off, 0, pa.p[1] + Zs.z * off);
         bG.addGeometry(rg, Mr, {
           uvFn: (p) => {
             const lx = (p[0] - pa.p[0]) * t[0] + (p[2] - pa.p[1]) * t[1];
