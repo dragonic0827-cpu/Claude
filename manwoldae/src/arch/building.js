@@ -3,7 +3,7 @@ import * as THREE from 'three';
 
 export function createBuilding(def, mats, opts = {}) {
   const g = new THREE.Group();
-  const w = def.baysFront * def.bayWidth, d = def.baysSide * def.bayDepth;
+  const w = def.columnSpanW ?? def.baysFront * def.bayWidth, d = def.columnSpanD ?? def.baysSide * def.bayDepth;
   const ph = def.platformHeight ?? 1, ch = def.columnHeight ?? 4;
   const plat = new THREE.Mesh(new THREE.BoxGeometry(w + 3, ph, d + 3), mats.stone);
   plat.position.y = ph / 2;
@@ -15,7 +15,7 @@ export function createBuilding(def, mats, opts = {}) {
   roof.position.y = ph + ch + ch * 0.45;
   for (const m of [plat, body, roof]) { m.castShadow = m.receiveShadow = true; m.userData.pickId = def.id; g.add(m); }
   g.position.set(def.cx, def.groundY ?? 0, def.cz);
-  g.rotation.y = THREE.MathUtils.degToRad(def.rotationDeg || 0);
+  g.rotation.y = -THREE.MathUtils.degToRad(def.rotationDeg || 0);
   g.userData = { id: def.id, nameKo: def.nameKo, kind: def.kind, ridgeY: (def.groundY ?? 0) + ph + ch * 1.9 };
   return g;
 }

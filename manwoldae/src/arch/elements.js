@@ -5,7 +5,7 @@ export function createStairs(def, mats) {
   const h = def.topY - def.bottomY;
   const m = new THREE.Mesh(new THREE.BoxGeometry(def.width, h, def.run), mats.stoneTop);
   m.position.set(def.cx, def.bottomY + h / 2, def.cz);
-  m.rotation.y = THREE.MathUtils.degToRad(def.rotationDeg || 0);
+  m.rotation.y = -THREE.MathUtils.degToRad(def.rotationDeg || 0);
   m.castShadow = m.receiveShadow = true;
   return m;
 }
@@ -48,6 +48,15 @@ export function createLandmark(def, mats, heightAt) {
   const m = new THREE.Mesh(new THREE.CylinderGeometry(1, 1, 3, 8), mats.stone);
   const y = def.y ?? heightAt(def.x, def.z);
   m.position.set(def.x, y + 1.5, def.z);
+  m.userData.pickId = def.id;
+  return m;
+}
+
+export function createBridge(def, mats) {
+  const m = new THREE.Mesh(new THREE.BoxGeometry(def.width, 0.6, def.length), mats.stoneTop);
+  m.position.set(def.cx, def.deckY - 0.3, def.cz);
+  m.rotation.y = -THREE.MathUtils.degToRad(def.rotationDeg || 0);
+  m.castShadow = m.receiveShadow = true;
   m.userData.pickId = def.id;
   return m;
 }

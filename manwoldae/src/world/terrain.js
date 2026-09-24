@@ -21,9 +21,9 @@ export function createTerrain(spec, mats) {
     const h = t.topY - t.bottomY;
     const m = new THREE.Mesh(new THREE.BoxGeometry(t.w, h, t.d), mats.stone);
     m.position.set(t.cx, t.bottomY + h / 2, t.cz);
-    m.rotation.y = THREE.MathUtils.degToRad(t.rotationDeg || 0);
+    m.rotation.y = -THREE.MathUtils.degToRad(t.rotationDeg || 0);
     m.receiveShadow = true;
     group.add(m);
   }
-  return { group, heightAt };
+  return { group, heightAt, groundAt: heightAt };
 }

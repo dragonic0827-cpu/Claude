@@ -7,7 +7,7 @@ import { createEnvironment } from './world/sky.js';
 import { createTerrain } from './world/terrain.js';
 import { createVegetation } from './world/vegetation.js';
 import { createBuilding } from './arch/building.js';
-import { createStairs, createCorridor, createWall, createLandmark } from './arch/elements.js';
+import { createStairs, createBridge, createCorridor, createWall, createLandmark } from './arch/elements.js';
 
 const status = (msg) => {
   const el = document.getElementById('loading-msg');
@@ -56,6 +56,7 @@ async function main() {
     scene.add(b);
   }
   for (const def of spec.stairs || []) scene.add(createStairs(def, mats));
+  for (const def of spec.bridges || []) scene.add(createBridge(def, mats));
   const ctx = { buildings: spec.buildings, terraces: spec.terraces || [] };
   for (const def of spec.corridors || []) scene.add(createCorridor(def, mats, terrain.heightAt, ctx));
   for (const def of spec.walls || []) scene.add(createWall(def, mats, terrain.heightAt, ctx));

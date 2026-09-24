@@ -179,6 +179,57 @@ export function dancheongBeamTexture(pal = {}, seed = 5) {
   return t;
 }
 
+// 12세기 고려 단청: 석간주(토주) 바탕 + 부재 아래 모서리 백분 선 + (rank 1–2) 가운데 연화·보상화 문양
+// u: 부재 길이 방향 0..1, v: 부재 높이(아래 0 → 위 1)
+export function dancheong12Texture(pal = {}, { rich = true, seed = 6 } = {}) {
+  const P = {
+    base: '#8C3A2B', white: '#EFE8D8', blue: '#2C4A8A', green: '#3F8F55', yellow: '#D8A840', ink: '#1F1B18', ...pal,
+  };
+  const [c, ctx] = canvas(1024, 64);
+  ctx.fillStyle = P.base;
+  ctx.fillRect(0, 0, 1024, 64);
+  const rand = rng(seed);
+  speckle(ctx, 1024, 64, rand, 1200, 0.06, false);
+  speckle(ctx, 1024, 64, rand, 600, 0.04, true);
+  // 백분 선: 아래 모서리 굵게, 위 모서리 가늘게 (먹선으로 테두리)
+  ctx.fillStyle = P.ink; ctx.fillRect(0, 55, 1024, 2);
+  ctx.fillStyle = P.white; ctx.fillRect(0, 57, 1024, 7);
+  ctx.fillStyle = P.white; ctx.fillRect(0, 0, 1024, 3);
+  ctx.fillStyle = P.ink; ctx.fillRect(0, 3, 1024, 1);
+  // 양 끝 짧은 띠(부재 이음 표시)
+  for (const x of [0, 1024 - 10]) {
+    ctx.fillStyle = P.white; ctx.fillRect(x, 0, 10, 64);
+    ctx.fillStyle = P.ink; ctx.fillRect(x === 0 ? 10 : x - 2, 0, 2, 64);
+  }
+  if (rich) {
+    // 가운데 보상화(연화) 원문 + 좌우 넝쿨
+    const cx = 512;
+    ctx.strokeStyle = P.green; ctx.lineWidth = 4;
+    for (const dir of [-1, 1]) {
+      ctx.beginPath();
+      ctx.moveTo(cx + dir * 30, 30);
+      for (let k = 1; k <= 6; k++) ctx.quadraticCurveTo(cx + dir * (30 + k * 26 - 13), k % 2 ? 12 : 48, cx + dir * (30 + k * 26), 30);
+      ctx.stroke();
+      for (let k = 1; k <= 6; k++) {
+        ctx.fillStyle = k % 2 ? P.blue : P.yellow;
+        ctx.beginPath(); ctx.arc(cx + dir * (30 + k * 26), 30, 5, 0, Math.PI * 2); ctx.fill();
+      }
+    }
+    for (const [r, col] of [[27, P.white], [24, P.blue], [18, P.white], [15, P.green], [9, P.yellow], [4, P.base]]) {
+      ctx.fillStyle = col;
+      ctx.beginPath(); ctx.arc(cx, 30, r, 0, Math.PI * 2); ctx.fill();
+    }
+    for (let k = 0; k < 8; k++) {
+      const a = (k / 8) * Math.PI * 2 + Math.PI / 8;
+      ctx.fillStyle = P.white;
+      ctx.beginPath(); ctx.ellipse(cx + Math.cos(a) * 21, 30 + Math.sin(a) * 21, 6, 3, a, 0, Math.PI * 2); ctx.fill();
+    }
+  }
+  const t = toTexture(c);
+  t.wrapS = THREE.ClampToEdgeWrapping;
+  return t;
+}
+
 // 서까래 마구리/부연 끝 단청용 작은 원형 문양
 export function rafterEndTexture(pal = {}) {
   const P = { green: '#3f7d62', red: '#9b2d20', blue: '#2f5d8c', yellow: '#d9a83a', white: '#ece6d6', ...pal };
