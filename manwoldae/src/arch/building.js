@@ -4,11 +4,13 @@
 //   createBuilding(def, mats, opts) → THREE.Group (월드 좌표에 배치, 정면 = 로컬 +z)
 //     children: 'foundation' (기단·월대·계단·초석) / 'superstructure' (목조·벽·지붕)
 //   createBuildingLOD(def, mats, opts) → THREE.LOD (high / medium / low)
+//   highBuildPending() → 이번 프레임에 예산(30 ms)을 넘겨 미룬 high 단계가 있었는지 (있으면 다시 그려 이어 지음)
 //
 // 치수 규칙은 spec.modelingGuide(column·bracket·roof·twoStoryGatehouse·platforms·dancheong12thCentury)를 따릅니다.
 import * as THREE from 'three';
 import { GeoSink } from './building-geo.js';
 import { textureMean } from '../core/textures.js';
+import { addUnderLift, UNDER_LIFT } from '../core/materials.js';
 import { RoofShape, buildRoof } from './roof.js';
 import {
   member, platformBox, platformStair, plinth, column, bracketSet, cornerBracket, bayInfill, railing,
@@ -34,6 +36,8 @@ function buildingMats(mats) {
     colors: new Map(),
     pobyeok: null,
   };
+  // 공포·첨차 밑면(황단 정점색)이 처마 밑 그늘에서도 주황으로 읽히게 (materials.js addUnderLift)
+  addUnderLift(m.painted, new THREE.Color((mats.palette || {}).hwangdan || '#D4622B'), UNDER_LIFT);
   cache.set(mats, m);
   return m;
 }
@@ -822,7 +826,7 @@ export function createBuilding(def, mats, opts = {}) {
   const s = ctx.S.build('superstructure', matFor, def.id);
   // 그림자 패스에서 뺄 것: 서까래 마구리·금동 장식·편액(몇 px 짜리 그림자, 서까래·지붕 그림자 안), 먼 단계의 기단(수백 m 밖 1–2 m 기단).
   // 창호·판문·포벽은 빛이 새지 않게 그대로 드리움
-  for (const m of s.children) if (NO_CAST.has(m.userData.matKey)) m.castShadow = false;
+  for (const m of s.children) if (NO_CAST.has(m.userData.matKey) || m.material?.userData?.noCastShadow) m.castShadow = false;
   if (lvl === 'low') for (const m of f.children) m.castShadow = false;
   group.add(f, s);
   const gy = def.groundY ?? 0;
@@ -845,23 +849,37 @@ export function createBuilding(def, mats, opts = {}) {
  *   opts.lodDistances = [medium, low] (m) 로 전환 거리를 바꿀 수 있습니다 (휴대폰은 더 짧게).
  *   전환에는 10 % 되돌림 여유(hysteresis)를 두어 경계에서 깜박이지 않게 합니다.
  *   high 단계는 처음에 짓지 않고, 카메라가 medium 거리의 1.5배 안에 들어오면 그때 짓습니다(시작 시간·메모리 절약).
- *   곧 필요한 미리 짓기는 60 ms 에 한 채씩, 지금 필요하면 바로 짓습니다. opts.eagerHigh = true 면 처음부터 모두 짓습니다.
+ *   곧 필요한 미리 짓기는 60 ms 에 한 채씩, 지금 필요하면(medium 거리 안) 바로 짓되 한 프레임에 30 ms 를 넘기면 나머지는
+ *   다음 프레임으로 미룹니다(그동안 medium 단계; highBuildPending() 이 true 면 한 장 더 그려야 함).
+ *   opts.eagerHigh = true 면 처음부터 모두 짓습니다. main 은 쉬는 동안 안내 여행 지점 둘레의 전각을 미리 짓습니다.
  *   lod.userData.ensureHigh() 로 바로 지을 수도 있습니다. 새로 지은 단계는 폐허 모드·선택 강조 상태를 따릅니다.
  */
 const _cp = new THREE.Vector3(), _op = new THREE.Vector3();
 let lastLazyBuild = -Infinity;
 const HYST = 0.1;
+// 한 프레임(한 번의 render 안 LOD 갱신들)에 high 단계를 짓는 데 쓸 시간. 넘으면 나머지는 다음 프레임으로 미루고
+// (그동안은 medium 단계가 보임) highBuildPending() 이 true 를 돌려 main 이 한 장 더 그리게 함
+const FRAME_BUDGET_MS = 30;
+let frameSpent = 0, lastUpdateEnd = -Infinity, deferred = false;
+export function highBuildPending() { const v = deferred; deferred = false; return v; }
 
 class BuildingLOD extends THREE.LOD {
   update(camera) {
+    const t0 = performance.now();
+    // 앞 LOD 갱신이 끝난 지 4 ms 넘게 지났으면 새 프레임
+    if (t0 - lastUpdateEnd > 4) frameSpent = 0;
     if (this.makeHigh) {
       _cp.setFromMatrixPosition(camera.matrixWorld);
       _op.setFromMatrixPosition(this.matrixWorld);
       const d = _cp.distanceTo(_op) / camera.zoom;
       const dMed = this.userData.lodDistances[0];
       if (d < dMed * 1.5) {
-        const now = performance.now();
-        if (d < dMed * (1 - HYST) || now - lastLazyBuild > 60) { lastLazyBuild = now; this.ensureHigh(); }
+        const urgent = d < dMed * (1 - HYST);
+        if (urgent ? frameSpent < FRAME_BUDGET_MS : frameSpent === 0 && t0 - lastLazyBuild > 60) {
+          lastLazyBuild = t0;
+          this.ensureHigh();
+          frameSpent += performance.now() - t0;
+        } else if (urgent) deferred = true;
       }
     }
     // 선택 강조가 풀렸으면 새 단계에 따라 붙인 강조도 뗌
@@ -870,6 +888,7 @@ class BuildingLOD extends THREE.LOD {
       this.rims = null;
     }
     super.update(camera);
+    lastUpdateEnd = performance.now();
   }
 
   ensureHigh() {

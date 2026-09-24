@@ -45,6 +45,46 @@ export const DEFAULT_PALETTE = {
   waterShallow: '#6C8C88',
 };
 
+// 황단(공포·첨차 밑면) 밑면 채움빛: 처마 밑 밑면은 반구광의 땅빛(갈색)만 받아 어둡고, 어두운 곳은 톤 매핑의 박명시 보정으로
+// 채도가 빠져 주황이 붉은 밤색으로 읽힘. 정점색이 황단인 아래 향한 면에만 반구광(하늘·땅 평균)에 비례한 작은 빛을 더함
+// — 한낮·아침엔 뜰에서 튀어 오른 빛만큼 밝아지고, 반구광이 어두운 달밤에는 거의 더하지 않아 스스로 빛나 보이지 않음.
+//   addUnderLift(material, color, strength): 재질마다 한 번. color = 황단(정점색 재질이면 정점색, 아니면 재질 색과 견줌),
+//   strength ≈ 0.5–0.9 (반구광 평균에 곱하는 몫, 기본 0.7)
+export const UNDER_LIFT = 0.7;
+export function addUnderLift(material, color, strength = UNDER_LIFT) {
+  if (!material || material.userData.underLift) return material;
+  const u = { uUnderCol: { value: new THREE.Color(color) }, uUnderLift: { value: strength } };
+  material.userData.underLift = u;
+  const prev = material.onBeforeCompile;
+  material.onBeforeCompile = (sh, r) => {
+    prev?.call(material, sh, r);
+    Object.assign(sh.uniforms, u);
+    sh.vertexShader = sh.vertexShader
+      .replace('#include <common>', '#include <common>\nvarying float vUnderDown;')
+      .replace('#include <defaultnormal_vertex>', '#include <defaultnormal_vertex>\n\tvUnderDown = -normalize( mat3( modelMatrix ) * objectNormal ).y;');
+    sh.fragmentShader = sh.fragmentShader
+      .replace('#include <common>', '#include <common>\nvarying float vUnderDown;\nuniform vec3 uUnderCol;\nuniform float uUnderLift;')
+      .replace('#include <lights_fragment_begin>', `#include <lights_fragment_begin>
+	#if NUM_HEMI_LIGHTS > 0
+	{
+		#ifdef USE_COLOR
+		vec3 underBase = vColor.rgb;
+		#else
+		vec3 underBase = diffuse;
+		#endif
+		float underMask = ( 1.0 - smoothstep( 0.02, 0.06, distance( underBase, uUnderCol ) ) ) * smoothstep( 0.25, 0.85, vUnderDown );
+		vec3 underFill = 0.5 * ( hemisphereLights[ 0 ].skyColor + hemisphereLights[ 0 ].groundColor );
+		totalEmissiveRadiance += diffuseColor.rgb * underFill * ( uUnderLift * underMask );
+	}
+	#endif`);
+  };
+  // 같은 채움빛을 단 재질끼리는 프로그램을 나누되, 채움빛이 없는(또는 다른 셰이더 조각을 단) 재질과는 섞이지 않게
+  const prevKey = material.customProgramCacheKey.bind(material);
+  material.customProgramCacheKey = () => `${prevKey()}|underLift`;
+  material.needsUpdate = true;
+  return material;
+}
+
 export function createMaterials(palette = {}) {
   const P = { ...DEFAULT_PALETTE, ...palette };
   const std = (o) => new THREE.MeshStandardMaterial({ roughness: 0.85, metalness: 0, ...o });
@@ -63,7 +103,8 @@ export function createMaterials(palette = {}) {
     beamPlain: std({ map: dancheong12Texture(dc, { rich: false }), color: 0xffffff, roughness: 0.75 }), // rank 3–4
     beam14: std({ map: dancheongBeamTexture({ green: P.noerok, red: P.lacquerRed, blue: P.gunCheong, yellow: P.seokhwang, white: P.baekbun, black: P.meok }), color: 0xffffff, roughness: 0.75 }), // 14세기안 토글
     timber: std({ color: P.timberRed, roughness: 0.75 }),                                      // 공포·도리·서까래 몸
-    bracketUnder: std({ color: P.hwangdan, roughness: 0.75 }),                                  // 공포·첨차 밑면
+    // 공포·첨차 밑면 단색(지금 전각·회랑은 정점색 재질의 황단 면을 쓰고, 이 재질은 유적 보기 목부 목록에만) — 같은 밑면 채움빛
+    bracketUnder: addUnderLift(std({ color: P.hwangdan, roughness: 0.75 }), P.hwangdan),
     whiteLine: std({ color: P.baekbun, roughness: 0.8 }),                                       // 백분 선·백도
     // 서까래·부연 마구리: 12세기 기본은 석간주에 백분 테두리, 14세기안은 녹색 바탕 원문 (단청 토글이 고름)
     rafterEnd: std({ map: rafterEndTexture({ base: P.timberRed, white: P.baekbun }, '12'), color: 0xffffff, roughness: 0.8 }),
@@ -103,5 +144,8 @@ export function createMaterials(palette = {}) {
     // ── 선택 표시 ──
     highlight: new THREE.MeshBasicMaterial({ color: 0xffd479, transparent: true, opacity: 0.35, depthWrite: false }),
   };
+  // 아주 작은 부재(금동 장식·금박·서까래 마구리): 그림자 패스에서 뺌 — 몇 텍셀짜리 그림자라 보이지 않고 그리기 호출만 늚.
+  // 전각(building.js)·합친 정적 요소(elements mergeElements)·main 의 그림자 설정이 모두 이 표시를 따릅니다.
+  for (const k of ['gilt', 'goldLeaf', 'rafterEnd', 'rafterEnd14']) m[k].userData.noCastShadow = true;
   return m;
 }

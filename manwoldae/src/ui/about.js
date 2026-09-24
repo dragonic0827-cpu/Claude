@@ -1,12 +1,12 @@
 // 역사와 고증 시트(연표 · 장소 목록 · 고증 자료 · 복원에 대하여)와 도움말 시트
-import { h, icon, confidenceBadge, CONFIDENCE, nobreak, confidenceOf } from './dom.js';
+import { h, icon, confidenceBadge, CONFIDENCE, nobreak, confidenceOf, noteText } from './dom.js';
 
 // 학설에 따라 바꿔 보는 복원 선택지 (docs/research.md 6.1 · 5장)
 export const ALTERNATIVES = [
   { id: 'paving', title: '회경전 뜰 바닥', off: '박석', on: '전돌',
     note: '『고려도경』의 "甃石"을 넓은 돌을 깐 것으로 읽었습니다. 甃는 본래 벽돌을 까는 일이고, 회랑 안 마당에 전(塼)을 깔았다는 설명(신편한국사)도 있습니다.' },
   { id: 'dapo', title: '공포', off: '주심포', on: '다포',
-    note: '남한의 현존 고려 건물은 모두 주심포입니다. 12세기 송 궁전과 개성 일대 14세기 건물을 따라 기둥 사이에도 공포를 한 조씩 넣은 안입니다(1·2등급 전각).' },
+    note: '남한의 현존 고려 건물은 모두 주심포입니다. 12세기 송 궁전과 개성 일대 14세기 건물을 따라 기둥 사이에도 공포를 한 조씩 넣은 안입니다(회경전·건덕전 등 중심 전각과 주요 궁문).' },
   { id: 'dc14', title: '단청', off: '12세기', on: '14세기',
     note: '12세기 이전에는 부재 전체를 붉게 칠했고, 윗부재를 녹색으로 칠하는 상록하단(上綠下丹)은 13–14세기에 받아들였다는 연구(이은희 2016)를 따라 두 안을 비교합니다.' },
   { id: 'celadon', title: '금원 정자 기와', off: '회흑색', on: '청자기와',
@@ -58,7 +58,7 @@ export function createAbout({ spec, sheets, onSelect, onOpenChange, onAlt }) {
     hist.append(h('li', {},
       h('span', { class: 'tl-year' }, e.label || String(e.year)),
       h('div', { class: 'tl-body' }, h('p', {}, nobreak(e.textKo || '')), e.confidence ? confidenceBadge(e.confidence, e.confidenceNote) : null,
-        e.confidenceNote ? h('span', { class: 'conf-note' }, e.confidenceNote) : null)));
+        e.confidenceNote ? h('span', { class: 'conf-note' }, noteText(e.confidenceNote)) : null)));
   }
   panels.history.append(hist);
 
@@ -77,7 +77,7 @@ export function createAbout({ spec, sheets, onSelect, onOpenChange, onAlt }) {
       const { confidence: cf, note } = confidenceOf(d);
       const c = CONFIDENCE[cf];
       ul.append(h('li', {}, h('button', { class: 'place', type: 'button', onclick: () => onSelect?.(d.id) },
-        h('span', { class: `dot-conf ${c?.cls || 'c-none'}`, title: note || cf || '', 'aria-hidden': 'true' }),
+        h('span', { class: `dot-conf ${c?.cls || 'c-none'}`, title: note ? noteText(note) : cf || '', 'aria-hidden': 'true' }),
         h('span', { class: 'place-n' }, d.nameKo), d.nameHanja ? h('span', { class: 'place-h', lang: 'zh-Hant' }, d.nameHanja) : null,
         cf ? h('span', { class: 'sr-only' }, `, 신뢰도 ${cf}`) : null)));
     }

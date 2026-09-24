@@ -3,7 +3,7 @@
 // createInfo({ items, sheets, onFocus, onChange }) → { select(id, { min }), clear(), current, refreshHighlight() }
 //   items: Map id → { id, type: 'building'|'landmark'|'bridge'|'stairs'|'corridor'|'wall', def, object, center? }
 import * as THREE from 'three';
-import { h, icon, confidenceBadge, CONFIDENCE, KIND_KO, announce, nobreak, cleanNote, confidenceOf } from './dom.js';
+import { h, icon, confidenceBadge, CONFIDENCE, KIND_KO, announce, nobreak, cleanNote, confidenceOf, noteText } from './dom.js';
 
 // 선택 강조: 같은 지오메트리를 가산 혼합 프레넬 셰이더로 한 번 더 (재질을 건드리지 않음)
 const RIM_VERT = /* glsl */`
@@ -67,11 +67,6 @@ function addHighlight(root) {
 }
 
 const fmt = (v, d = 1) => (Number.isFinite(v) ? (+v.toFixed(d)).toString() : '');
-// '확실(칸수)/추정(치수)' → '칸수: 확실 · 치수: 추정'
-const noteText = (n) => {
-  const parts = String(n || '').split('/').map((p) => p.trim().match(/^(확실|추정|불확실)\s*\((.+)\)$/));
-  return parts.length && parts.every(Boolean) ? parts.map((m) => `${m[2]}: ${m[1]}`).join(' · ') : String(n || '');
-};
 
 export function createInfo({ items, sheets, onFocus, onChange }) {
   const eyebrowKind = h('span', {});

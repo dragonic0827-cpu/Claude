@@ -13,7 +13,7 @@ export function createMinimap({ spec, root, heightAt, onPick, onChange, northOff
   const W = EXT.x1 - EXT.x0, D = EXT.z1 - EXT.z0;
   const canvas = h('canvas', {
     class: 'minimap-canvas', role: 'application', tabindex: '0', 'aria-roledescription': '평면도',
-    'aria-label': '궁성 평면도: 누르면 그곳으로 이동합니다. 방향키로 표적을 옮기고 Enter 로 이동',
+    'aria-label': '궁성 평면도: 누르면 그곳으로 이동합니다. 방향키로 표적을 옮기고 Enter 를 누르면 이동합니다',
   });
   const north = h('span', { class: 'minimap-north', title: '진북 (중심축은 진북에서 서쪽으로 17°)', 'aria-hidden': 'true' }, icon('north'), h('b', {}, '北'));
   north.style.transform = `rotate(${northOffsetDeg}deg)`;

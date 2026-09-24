@@ -115,7 +115,7 @@ a:hover { text-decoration-color: currentColor; }
 .seg-btn[aria-checked='true'] .ico { color: var(--gilt); }
 .seg-btn[aria-checked='true']::after { content: ''; position: absolute; left: 14px; right: 14px; bottom: 2px; height: 1px; background: var(--gilt); }
 .dock-sep { width: 1px; height: 30px; margin: 0 6px; background: var(--hair-2); }
-.time-toggle { display: none; }
+.time-toggle, .more-toggle { display: none; }
 
 .pop {
   position: absolute; bottom: calc(100% + 10px); left: 0; min-width: 250px; padding: 8px; display: flex; flex-direction: column; gap: 2px;
@@ -130,6 +130,13 @@ a:hover { text-decoration-color: currentColor; }
 .pop-item[aria-checked='true'], .pop-item.on { background: var(--celadon-dim); }
 .pop-item[aria-checked='true'] b, .pop-item.on b { color: var(--celadon-hi); }
 .pop-note { margin: 6px 8px 2px; font-size: 12px; color: var(--faint); }
+/* 더보기 메뉴 (좁은 화면): 이름표·도움말 / 화질 */
+.pop-menu, .pop-group { display: flex; flex-direction: column; gap: 2px; }
+.pop-sep { height: 1px; margin: 6px 8px; background: var(--hair-2); }
+.pop-item { min-height: 44px; }
+.pop-item .ico { color: var(--muted); }
+.pop-item[aria-checked='true'] .ico { color: var(--celadon-hi); }
+.pop-group .pop-item { padding-left: 42px; }
 
 /* ───────── 시트 (패널) ───────── */
 .sheet {
@@ -205,7 +212,9 @@ body.map-open .sheet-right { max-height: calc(100% - var(--st) - var(--sb) - 32p
 
 /* 정보 시트 */
 .tabs { display: flex; gap: 2px; margin: 0 -4px 6px; border-bottom: 1px solid var(--hair); }
-.tab { padding: 8px 10px 9px; border: 0; background: none; color: var(--muted); font-size: 14px; cursor: pointer; position: relative; }
+.tab { padding: 8px 10px 9px; border: 0; background: none; color: var(--muted); font-size: 14px; cursor: pointer; position: relative; overflow-wrap: normal; }
+/* 좁은 휴대폰(360 px)에서도 탭 넷이 한 줄에 들도록; 더 좁으면 낱말 사이에서만 줄을 바꿈(‘연/표’처럼 쪼개지 않음) */
+@media (max-width: 400px) { .tab { padding: 8px 7px 9px; } }
 .tab:hover { color: var(--paper); }
 .tab[aria-selected='true'] { color: var(--paper); }
 .tab[aria-selected='true']::after { content: ''; position: absolute; left: 8px; right: 8px; bottom: -1px; height: 2px; background: var(--celadon); }
@@ -367,7 +376,10 @@ body.sheet-left-open .status { left: calc(var(--sl) + 16px + 384px + 14px); }
   .dock { left: calc(var(--sl) + 16px); right: calc(var(--sr) + 16px); bottom: calc(var(--sb) + 12px); padding: 3px; justify-content: space-between; gap: 0; }
   .dock-seg, .dock-sep { display: none; }
   .time-toggle { display: inline-flex; }
-  .dock-btn { flex: 1 1 0; min-width: 0; height: 48px; padding: 5px 0 4px; gap: 4px; font-size: 10.5px; letter-spacing: 0; }
+  /* 자주 쓰는 여섯만 막대에, 이름표·도움말·화질은 ‘더보기’ 메뉴로 — 360 px 에서도 단추마다 46 px 넘게 */
+  .dock-btn.in-more { display: none; }
+  .more-toggle { display: inline-flex; }
+  .dock-btn { flex: 1 1 0; min-width: 44px; height: 48px; padding: 5px 0 4px; gap: 4px; font-size: 10.5px; letter-spacing: 0; }
   .dock-btn .ico { width: 19px; height: 19px; }
   .dock-btn[aria-pressed='true']::after { top: 5px; right: calc(50% - 15px); }
   .pop { left: 0; right: 0; min-width: 0; }
@@ -396,6 +408,8 @@ body.sheet-left-open .status { left: calc(var(--sl) + 16px + 384px + 14px); }
   .minimap-head { height: 24px; }
   .status { left: calc(var(--sl) + 16px); right: calc(var(--sr) + 16px); width: auto; bottom: calc(var(--sb) + 12px + var(--dock-h) + 12px); }
   body.sheet-left-open .status, body.sheet-right-open .status { display: none; }
+  /* 도구 막대의 펼침 목록(시간대·더보기)이 열린 동안 알림은 비켜 둠 (보이지 않게만 — 스크린리더 알림은 그대로) */
+  body.dock-pop-open .status { opacity: 0; }
   .joystick { left: calc(var(--sl) + 20px); bottom: calc(var(--sb) + var(--dock-h) + 36px); }
   body.walking .status { bottom: calc(var(--sb) + var(--dock-h) + 36px + 140px); }
   /* 패널이 열리면 평면도(위 오른쪽)가 패널 머리(닫기·접기 단추)를 가리지 않게 숨김 */

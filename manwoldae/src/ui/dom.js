@@ -87,14 +87,19 @@ export const CONFIDENCE = {
   추정: { cls: 'c-est', text: '근거가 있으나 해석이나 계산이 들어간 복원입니다.' },
   불확실: { cls: 'c-unsure', text: '이견이 크거나 근거가 약한, 가설에 가까운 배치입니다.' },
 };
+// '확실(칸수)/추정(치수)' → '칸수: 확실 · 치수: 추정' (그 꼴이 아니면 그대로)
+export const noteText = (n) => {
+  const parts = String(n || '').split('/').map((p) => p.trim().match(/^(확실|추정|불확실)\s*\((.+)\)$/));
+  return parts.length && parts.every(Boolean) ? parts.map((m) => `${m[2]}: ${m[1]}`).join(' · ') : String(n || '');
+};
 export function confidenceBadge(conf, note) {
   const c = CONFIDENCE[conf] || CONFIDENCE['추정'];
-  return h('span', { class: `badge ${c.cls}`, title: note || c.text }, conf || '추정');
+  return h('span', { class: `badge ${c.cls}`, title: note ? noteText(note) : c.text }, conf || '추정');
 }
 
 export const KIND_KO = {
   hall: '전각', gate: '문', gatehouse: '문루(2층 누문)', pavilion: '누각·정자', landmark: '지점',
-  bridge: '다리', stairs: '돌계단', peak: '산', corridor: '회랑', wall: '담장', palaceWall: '궁성 성벽', cityWall: '도성 성벽',
+  bridge: '다리', stairs: '돌계단', peak: '산', corridor: '회랑', wall: '담장', palaceWall: '궁성 성벽', cityWall: '개경 성곽',
 };
 
 // 신뢰도와 그 메모 (spec 의 모든 전각·계단·회랑·담장·다리·지점에 있음)

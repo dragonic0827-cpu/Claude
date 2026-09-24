@@ -3,7 +3,8 @@
 // 장면은 필요할 때만 그립니다(조작·비행·걷기·시간대 전환·이름표 흐림이 있을 때). 그림자 맵도 빛·상자가 바뀔 때만 갱신(sky.js).
 // 테스트 API: window.__app = { THREE, scene, camera, controls, renderer, spec, terrain, buildings, env, nav, items, labels,
 //   lookAt(cam, target), setTime(name, instant?), setRuins(bool), setWalk(bool), setLabels(bool), setQuality('high'|'medium'|'low'),
-//   setAlt(id, on) → Promise (복원 선택지: paving·dapo·dc14·celadon), select(id), tour: { go(i, instant), next(), prev() }, info() }
+//   setAlt(id, on) → Promise (복원 선택지: paving·dapo·dc14·celadon), select(id), tour: { go(i, instant), next(), prev() }, info(),
+//   prebuild() → { queued, done, remaining, built, ms } (쉬는 동안 high 단계 미리 짓기 진행) }
 //   ·  window.__ready = true (첫 화면을 그린 뒤) · window.__boot = true (모듈을 모두 불러와 실행을 시작함 — index.html 감시용)
 import * as THREE from 'three';
 import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
@@ -104,7 +105,7 @@ async function main() {
   }
 
   // ── 크기: 불러오는 동안에도 (회전·창 크기·숨겨졌다 보이기) — ResizeObserver + resize ──
-  const hooks = { resize: null, restored: null };   // 불러오기가 끝난 뒤 붙는 것(패널 중심 옮기기·평면도·이름표)
+  const hooks = { resize: null, restored: null, rebuilt: null };   // 불러오기가 끝난 뒤 붙는 것(패널 중심 옮기기·평면도·이름표·미리 짓기)
   const size = { w: W0, h: H0 };
   function onResize() {
     const w = container.clientWidth, hgt = container.clientHeight;
@@ -181,7 +182,9 @@ async function main() {
   world.name = 'palace';
   scene.add(world);
   const tagPick = (obj, id) => obj.traverse((o) => { if (o.isMesh && !o.userData.pickId) o.userData.pickId = id; });
-  const shadowAll = (obj) => obj.traverse((o) => { if (o.isMesh) { o.castShadow = true; o.receiveShadow = true; } });
+  // 계단·다리·회랑·담장·지점: 모두 그림자를 드리우고 받되, 아주 작은 부재 재질(materials.js 의 noCastShadow)은 드리우지 않음
+  const noCast = (o) => !!(Array.isArray(o.material) ? o.material[0] : o.material)?.userData?.noCastShadow;
+  const shadowAll = (obj) => obj.traverse((o) => { if (o.isMesh) { o.castShadow = !noCast(o); o.receiveShadow = true; } });
   const makeBuilding = typeof Building.createBuildingLOD === 'function' ? Building.createBuildingLOD : Building.createBuilding;
   const lodOpts = mobile ? { lodDistances: [55, 150] } : {};
   // 복원 선택지(다른 학설): 전돌 뜰 · 다포 · 14세기 단청 · 청자기와
@@ -274,9 +277,9 @@ async function main() {
   }
   // 재질별로 합쳐 그리기 호출을 줄임 (elements.mergeElements 가 있으면). 합친 뒤에는 개별 객체가 없으므로 강조는 생략.
   const canMerge = typeof Elements.mergeElements === 'function';
-  const mergeInto = (list, name, parent = world) => {
+  const mergeInto = (list, name, parent = world, opts) => {
     if (!list.length) return [];
-    const g = canMerge ? safe(() => Elements.mergeElements(list, name), `${name} 합치기`) : null;
+    const g = canMerge ? safe(() => Elements.mergeElements(list, name, opts), `${name} 합치기`) : null;
     if (g) {
       for (const it of items.values()) if (list.includes(it.object)) it.object = null;
       parent.add(g);
@@ -286,7 +289,10 @@ async function main() {
     return list;
   };
   const staticGroups = mergeInto(statics, 'elements-static');
-  const outerGroups = mergeInto(outerWalls, 'walls-outer');
+  // 궁성·황성·나성은 수 km 에 걸쳐 있어 재질별로 하나씩 합치면 늘 화면·그림자 상자 안으로 셈(경계 구 반지름 3.4 km) →
+  // 궁궐에서 1.3 km 안(궁성·황성: 늘 그 안에서 보므로)은 한 덩이, 그 밖(나성)은 1.4 km 칸(2.8 km 밖은 2.8 km 칸 …)으로 나눠
+  // 화면·그림자 상자 밖 칸은 건너뜀. 700 m 칸으로 모두 나누면 그리기 호출이 한 화면에 12–17개, 그림자에 6개 늘어 이렇게 정함
+  const outerGroups = mergeInto(outerWalls, 'walls-outer', world, { cell: 1400, near: 1300, center: [0, 0] });
   const corridorRoot = new THREE.Group();
   corridorRoot.name = 'corridors';
   world.add(corridorRoot);
@@ -476,6 +482,7 @@ async function main() {
     }
     info.refreshHighlight?.();
     altBusy = false;
+    hooks.rebuilt?.();
     const a = ALTERNATIVES.find((q) => q.id === id);
     showToast(`<b>${a ? `${a.title}: ${on ? a.on : a.off}` : '바꿨습니다'}</b><span>${on ? '다른 학설에 따른 모습입니다' : '이 복원의 기본안입니다'}</span>`);
     done();
@@ -793,10 +800,15 @@ async function main() {
   // ── 그리기 루프 (필요할 때만 그림) ──
   const shadowTarget = new THREE.Vector3();
   let last = performance.now(), labelsBusy = true, lastActive = false, envVersion = -1, lodSig = -1;
-  // 전각 LOD 단계가 바뀌면 그림자 맵도 다시 (그림자는 멈춰 있어도 단계와 맞아야 함)
+  // 전각 LOD 단계가 바뀌면 그림자 맵도 다시 (그림자는 멈춰 있어도 단계와 맞아야 함).
+  // 단계 번호가 아니라 지금 단계의 이름(high·medium·low)으로 셈 — 미리 지은 high 단계가 끼어들어 번호만 밀려도 다시 그리지 않게
+  const LOD_RANK = { high: 1, medium: 2, low: 3 };
   const lodSignature = () => {
     let s = 0, k = 1;
-    for (const b of buildings.values()) { if (b.isLOD) s += (b.getCurrentLevel() + 1) * k; k = (k * 3) % 99991; }
+    for (const b of buildings.values()) {
+      if (b.isLOD) s += (LOD_RANK[b.levels[b.getCurrentLevel()]?.object?.userData?.detail] || 0) * k;
+      k = (k * 3) % 99991;
+    }
     return s;
   };
   function frame() {
@@ -819,6 +831,8 @@ async function main() {
     if (frames > 0) {
       frames--;
       renderer.render(scene, camera);
+      // 한 프레임 예산을 넘겨 미룬 전각 high 단계가 있으면 다음 프레임도 그려 이어 지음
+      if (Building.highBuildPending?.()) invalidate();
       const sig = lodSignature();
       if (sig !== lodSig) { if (lodSig >= 0) { env.invalidateShadows(); invalidate(); } lodSig = sig; }
       samplePerf(dt, active && lastActive);
@@ -829,6 +843,68 @@ async function main() {
     }
     lastActive = active;
   }
+
+  // ── 쉬는 동안 전각의 가장 자세한 단계(high) 미리 짓기 ──
+  // high 단계는 카메라가 다가올 때 짓는데, 안내 여행으로 순간 이동하면 그 자리의 여러 채를 한 프레임에 지어 잠깐 멈춥니다.
+  // 그래서 불러온 뒤 장면이 가만한 틈(requestIdleCallback, 없으면 setTimeout)마다 한 채씩, 안내 여행 지점에 도착하면
+  // 곧바로 필요할 전각(지점 카메라에서 medium 거리의 1.5배 안, 가까운 순)과 1·2등급 전각을 미리 지어 둡니다.
+  // 누르기·끌기·휠·키 입력, 비행·걷기 조작, 그리기 중에는 쉬었다가 조용해지면(1.2 초) 이어 갑니다.
+  const prebuild = (() => {
+    // 도착하자마자 필요한 것(medium 거리 안)에 더해, 도착 뒤·비행 중 60 ms 에 한 채씩 지을 것(1.5배 안)까지 — 지오메트리 약 33–36 MB
+    const reach = 1.5;
+    const order = () => {
+      const list = [], seen = new Set();
+      const push = (id) => { if (!seen.has(id) && buildings.has(id)) { seen.add(id); list.push(id); } };
+      for (const s of spec.tour || []) {
+        if (!s?.camera) continue;
+        const near = [];
+        for (const [id, b] of buildings) {
+          const dMed = b.userData?.lodDistances?.[0];
+          if (!dMed) continue;
+          const d = Math.hypot(b.position.x - s.camera.x, b.position.y - s.camera.y, b.position.z - s.camera.z);
+          if (d < dMed * reach) near.push([d, id]);
+        }
+        near.sort((a, b) => a[0] - b[0]).forEach(([, id]) => push(id));
+      }
+      for (const d of defs) if ((d.rank ?? 9) <= 2) push(d.id);
+      return list;
+    };
+    const QUIET = 1200;
+    const hasIdle = typeof window.requestIdleCallback === 'function';
+    let queue = [], i = 0, handle = 0, timer = 0, lastInput = 0, built = 0, ms = 0, started = false;
+    const onInput = () => { lastInput = performance.now(); };
+    for (const t of ['pointerdown', 'wheel', 'keydown', 'touchstart']) addEventListener(t, onInput, { capture: true, passive: true });
+    const later = (wait) => { if (!timer && !handle) timer = setTimeout(() => { timer = 0; schedule(); }, wait); };
+    function schedule() {
+      if (handle || timer || i >= queue.length) return;
+      // 쉬는 틈이 오지 않아도(애니메이션 루프가 늘 도는 느린 기기) 0.3 초 뒤에는 불림 — 그때도 장면이 가만해야 지음
+      handle = hasIdle ? requestIdleCallback(step, { timeout: 300 }) : setTimeout(step, 80);
+    }
+    function step() {
+      handle = 0;
+      const now = performance.now();
+      const quietFor = now - lastInput;
+      // 장면이 움직이거나(그리는 중·비행·조작·걷기 이동) 방금 입력이 있었으면 쉬었다가
+      if (quietFor < QUIET || frames > 0 || nav.flying || nav.interacting || altBusy || document.hidden) { later(Math.max(250, QUIET - quietFor)); return; }
+      while (i < queue.length) {
+        const b = buildings.get(queue[i++]);
+        if (!b?.makeHigh) continue;
+        const t0 = performance.now();
+        try { b.userData.ensureHigh?.(); } catch (e) { console.warn('[main] 미리 짓기 실패:', e); }
+        ms += performance.now() - t0;
+        built++;
+        break;   // 한 틈에 한 채
+      }
+      schedule();
+    }
+    return {
+      start() { if (started) return; started = true; queue = order(); i = 0; later(QUIET); },
+      // 복원 선택지로 다시 지은 전각도 다시 미리 짓기 (이미 지은 것은 건너뜀)
+      restart() { if (!started) return; queue = order(); i = 0; schedule(); },
+      get status() { return { queued: queue.length, done: i >= queue.length, remaining: queue.slice(i).filter((id) => buildings.get(id)?.makeHigh).length, built, ms: Math.round(ms) }; },
+    };
+  })();
+  hooks.rebuilt = () => prebuild.restart();
 
   // ── 테스트·디버그 API ──
   const lookAt = (cam, target) => { nav.lookAt(cam, target); labels.snap(); invalidate(2); };
@@ -846,6 +922,7 @@ async function main() {
       next: () => tour.next(), prev: () => tour.prev(),
     },
     info: () => ({ ...renderer.info.render, pixelRatio: renderer.getPixelRatio(), geometries: renderer.info.memory.geometries, textures: renderer.info.memory.textures }),
+    prebuild: () => prebuild.status,
   };
 
   // 셰이더 미리 준비 후 첫 화면
@@ -873,6 +950,7 @@ async function main() {
   await yieldFrame();
   await yieldFrame();
   window.__ready = true;
+  prebuild.start();
 }
 
 // 회랑의 목조부(지붕·기둥)만 숨김: 이름(superstructure/roof…)이 있으면 이름으로, 없으면 돌 재질이 아닌 메시를 숨김

@@ -6,4 +6,4 @@
 - `verify_spec.py` — 겹침, 대지 높이 일치, 계단 연결, 투어 카메라 위치 등을 따로 검사합니다 (`python3 verify_spec.py`, 같은 폴더의 spec.json 을 읽음).
 - `dem_util.py` — 지형 고도 보간. 원본 DEM(`env/terr13.npy`, AWS Terrarium z13 타일을 PLAN 좌표로 재표본한 8 MB 격자)은 용량 때문에 저장소에 넣지 않았습니다. 명세에는 이미 10 m / 40 m / 200 m 격자로 표본한 고도가 들어 있습니다.
 
-다시 만들 때: `python3 build_spec.py` → `spec.json` 을 `src/data/spec.js` 로 감싸기(`export default …;`).
+다시 만들 때: `python3 build_spec.py` → `node wrap.mjs` (spec.json 을 `src/data/spec.js` 로 감쌈). 고도 격자 `env/terr13.npy` 가 있어야 합니다.

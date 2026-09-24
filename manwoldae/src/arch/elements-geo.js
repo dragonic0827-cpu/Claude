@@ -5,6 +5,7 @@
 import * as THREE from 'three';
 import { rng } from '../core/textures.js';
 import { materialUsesUV, colorAttribute } from './building-geo.js';
+import { addUnderLift, UNDER_LIFT } from '../core/materials.js';
 
 export const WHITE = new THREE.Color(1, 1, 1);
 export const clamp = (v, a, b) => (v < a ? a : v > b ? b : v);
@@ -593,6 +594,8 @@ export function elementMats(mats) {
       ao: (k) => new THREE.Color(k, k, k),
     },
   };
+  // 회랑 공포 밑면(황단 정점색)도 전각과 같은 밑면 채움빛
+  addUnderLift(E.wood, E.C.hwangdan, UNDER_LIFT);
   E.granite.name = 'elements-granite';
   E.wood.name = 'elements-wood';
   E.trim.name = 'elements-trim';
@@ -604,7 +607,13 @@ export function elementMats(mats) {
 // 여러 요소(담장·계단·회랑 등)를 재질별 메시 하나로 합쳐 그리기 호출을 줄입니다(정적인 것만).
 // 합친 메시는 userData.pickRanges = [[첫 삼각형, 끝 삼각형(미포함), pickId], ...] 를 갖고,
 // pickIdAt(mesh, faceIndex) 로 레이캐스트 결과의 id 를 찾습니다. 원래 지오메트리는 dispose 합니다.
-export function mergeElements(objects, name = 'elements') {
+//   opts.cell (m): 합친 메시가 이보다 넓으면(xz 경계 상자 반대각 > cell) 공간 칸으로 나눠, 화면·그림자 상자 밖 칸은
+//     frustum culling 으로 건너뛰게 합니다(도성 성벽처럼 수 km 에 걸친 것). 삼각형을 만든 차례(경로 순)대로 칸 크기를 넘지 않는
+//     구간으로 끊고, 구간을 그 무게중심이 든 칸에 모읍니다(칸 모서리를 스치는 몇 개짜리 조각이 생기지 않게).
+//     칸은 opts.center 에서 멀수록 두 배씩 커지고(반지름 grow·cell 안은 cell, 그 밖은 2·cell …, grow 기본 2),
+//     opts.near 안쪽은 한 덩이(늘 그 안에서 보는 둘레), opts.minTris(기본 200)보다 작은 칸은 가장 가까운 칸에 붙입니다.
+//   그림자: 재질에 userData.noCastShadow 가 있으면(금동 장식처럼 아주 작은 부재) 합친 메시도 그림자를 드리우지 않습니다.
+export function mergeElements(objects, name = 'elements', opts = {}) {
   const byMat = new Map();
   for (const o of objects) {
     if (!o) continue;
@@ -655,21 +664,109 @@ export function mergeElements(objects, name = 'elements') {
       vo += P.count;
       g.dispose();
     }
-    const geo = new THREE.BufferGeometry();
-    geo.setAttribute('position', new THREE.BufferAttribute(pos, 3));
-    geo.setAttribute('normal', new THREE.BufferAttribute(nor, 3));
-    if (uv) geo.setAttribute('uv', new THREE.BufferAttribute(uv, 2));
-    if (col) geo.setAttribute('color', colorAttribute(col));
-    geo.setIndex(new THREE.BufferAttribute(idx, 1));
-    geo.computeBoundingSphere();
-    geo.computeBoundingBox();
-    const mesh = new THREE.Mesh(geo, mat);
-    mesh.castShadow = mesh.receiveShadow = true;
-    mesh.matrixAutoUpdate = false;
-    mesh.userData.pickRanges = ranges;
-    group.add(mesh);
+    const cast = !mat.userData?.noCastShadow;
+    const parts = opts?.cell > 0 ? splitCells({ pos, nor, uv, col, idx, ranges }, opts) : null;
+    for (const part of parts || [{ pos, nor, uv, col, idx, ranges }]) {
+      const geo = new THREE.BufferGeometry();
+      geo.setAttribute('position', new THREE.BufferAttribute(part.pos, 3));
+      geo.setAttribute('normal', new THREE.BufferAttribute(part.nor, 3));
+      if (part.uv) geo.setAttribute('uv', new THREE.BufferAttribute(part.uv, 2));
+      if (part.col) geo.setAttribute('color', colorAttribute(part.col));
+      geo.setIndex(new THREE.BufferAttribute(part.idx, 1));
+      geo.computeBoundingSphere();
+      geo.computeBoundingBox();
+      const mesh = new THREE.Mesh(geo, mat);
+      mesh.castShadow = cast;
+      mesh.receiveShadow = true;
+      mesh.matrixAutoUpdate = false;
+      mesh.userData.pickRanges = part.ranges;
+      if (parts) mesh.name = `${name}:${part.key}`;
+      group.add(mesh);
+    }
   }
   return group;
+}
+
+// 합친 지오메트리를 공간 칸으로 나눔 (mergeElements 의 opts.cell). 나눌 만큼 넓지 않으면 null.
+function splitCells({ pos, nor, uv, col, idx, ranges }, { cell, center = [0, 0], near = 0, minTris = 200, grow = 2 }) {
+  const nt = idx.length / 3;
+  if (!nt) return null;
+  let x0 = Infinity, x1 = -Infinity, z0 = Infinity, z1 = -Infinity;
+  for (let i = 0; i < pos.length; i += 3) {
+    const x = pos[i], z = pos[i + 2];
+    if (x < x0) x0 = x; if (x > x1) x1 = x; if (z < z0) z0 = z; if (z > z1) z1 = z;
+  }
+  if (Math.hypot(x1 - x0, z1 - z0) / 2 <= cell) return null;
+  const [cx, cz] = center;
+  // 칸 크기: 가운데에서 멀수록 두 배씩 (반지름 grow·cell 안은 cell, grow·2·cell 안은 2·cell …)
+  const sizeAt = (r) => { let s = cell, lvl = 0; while (r > s * grow && lvl < 8) { s *= 2; lvl++; } return [s, lvl]; };
+  // 1) 삼각형을 만든 차례(경로를 따라 이어짐)대로 훑어, 칸 크기를 넘지 않는 연속 구간(run)으로 끊음
+  //    — 삼각형마다 칸을 고르면 칸 모서리를 스치는 몇 개짜리 조각이 그리기 호출만 늘리므로
+  const runs = [];
+  let run = null;
+  for (let t = 0; t < nt; t++) {
+    const a = idx[t * 3] * 3, b = idx[t * 3 + 1] * 3, c = idx[t * 3 + 2] * 3;
+    const x = (pos[a] + pos[b] + pos[c]) / 3 - cx, z = (pos[a + 2] + pos[b + 2] + pos[c + 2]) / 3 - cz;
+    if (run) {
+      const rx0 = Math.min(run.x0, x), rx1 = Math.max(run.x1, x), rz0 = Math.min(run.z0, z), rz1 = Math.max(run.z1, z);
+      if (rx1 - rx0 > run.lim || rz1 - rz0 > run.lim) run = null;
+      else { run.x0 = rx0; run.x1 = rx1; run.z0 = rz0; run.z1 = rz1; }
+    }
+    if (!run) { run = { tris: [], sx: 0, sz: 0, x0: x, x1: x, z0: z, z1: z, lim: sizeAt(Math.hypot(x, z))[0] }; runs.push(run); }
+    run.tris.push(t);
+    run.sx += x; run.sz += z;
+  }
+  // 2) 구간을 그 무게중심이 든 칸에 모음
+  const cells = new Map();
+  for (const q of runs) {
+    const x = q.sx / q.tris.length, z = q.sz / q.tris.length;
+    const r = Math.hypot(x, z);
+    const [sz, lvl] = sizeAt(r);
+    const key = r < near ? 'near' : `${lvl}_${Math.floor(x / sz)}_${Math.floor(z / sz)}`;
+    let cq = cells.get(key);
+    if (!cq) { cq = { key, tris: [], sx: 0, sz: 0 }; cells.set(key, cq); }
+    for (const t of q.tris) cq.tris.push(t);
+    cq.sx += q.sx; cq.sz += q.sz;
+  }
+  // 작은 칸은 무게중심이 가장 가까운 큰 칸에 붙임
+  const list = [...cells.values()];
+  for (const q of list) { q.mx = q.sx / q.tris.length; q.mz = q.sz / q.tris.length; }
+  const big = list.filter((q) => q.tris.length >= minTris);
+  if (big.length < 2) return null;
+  for (const q of list) {
+    if (q.tris.length >= minTris) continue;
+    let best = big[0], bd = Infinity;
+    for (const p of big) { const d = Math.hypot(p.mx - q.mx, p.mz - q.mz); if (d < bd) { bd = d; best = p; } }
+    for (const t of q.tris) best.tris.push(t);
+  }
+  const remap = new Int32Array(pos.length / 3);
+  return big.map((q) => {
+    q.tris.sort((a, b) => a - b);
+    remap.fill(-1);
+    let n = 0;
+    for (const t of q.tris) for (let k = 0; k < 3; k++) { const i = idx[t * 3 + k]; if (remap[i] < 0) remap[i] = n++; }
+    const P = new Float32Array(n * 3), N = new Float32Array(n * 3), U = uv ? new Float32Array(n * 2) : null, C = col ? new Float32Array(n * 3) : null;
+    for (let i = 0; i < remap.length; i++) {
+      const j = remap[i];
+      if (j < 0) continue;
+      P[j * 3] = pos[i * 3]; P[j * 3 + 1] = pos[i * 3 + 1]; P[j * 3 + 2] = pos[i * 3 + 2];
+      N[j * 3] = nor[i * 3]; N[j * 3 + 1] = nor[i * 3 + 1]; N[j * 3 + 2] = nor[i * 3 + 2];
+      if (U) { U[j * 2] = uv[i * 2]; U[j * 2 + 1] = uv[i * 2 + 1]; }
+      if (C) { C[j * 3] = col[i * 3]; C[j * 3 + 1] = col[i * 3 + 1]; C[j * 3 + 2] = col[i * 3 + 2]; }
+    }
+    const I = n > 65535 ? new Uint32Array(q.tris.length * 3) : new Uint16Array(q.tris.length * 3);
+    const R = [];
+    let r = 0;
+    q.tris.forEach((t, k) => {
+      I[k * 3] = remap[idx[t * 3]]; I[k * 3 + 1] = remap[idx[t * 3 + 1]]; I[k * 3 + 2] = remap[idx[t * 3 + 2]];
+      while (r < ranges.length - 1 && t >= ranges[r][1]) r++;
+      const id = ranges[r]?.[2] ?? null;
+      const last = R[R.length - 1];
+      if (last && last[2] === id && last[1] === k) last[1] = k + 1;
+      else R.push([k, k + 1, id]);
+    });
+    return { key: q.key, pos: P, nor: N, uv: U, col: C, idx: I, ranges: R };
+  });
 }
 
 // 합친 메시에서 삼각형 번호 → pickId
