@@ -1,0 +1,27 @@
+<!doctype html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>고려 개경 만월대</title>
+<script type="importmap">
+{
+  "imports": {
+    "three": "https://cdn.jsdelivr.net/npm/three@0.170.0/build/three.module.js",
+    "three/addons/": "https://cdn.jsdelivr.net/npm/three@0.170.0/examples/jsm/"
+  }
+}
+</script>
+<style>
+  html, body { margin: 0; height: 100%; overflow: hidden; background: #1b1f24; color: #eee; font-family: system-ui, sans-serif; }
+  #app { position: fixed; inset: 0; }
+  #loading { position: fixed; inset: 0; display: grid; place-items: center; background: #1b1f24; transition: opacity .6s; }
+  #loading.done { opacity: 0; pointer-events: none; }
+</style>
+</head>
+<body>
+<div id="app"></div>
+<div id="loading"><div id="loading-msg">불러오는 중…</div></div>
+<script type="module" src="./src/main.js"></script>
+</body>
+</html>

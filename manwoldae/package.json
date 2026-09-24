@@ -1,0 +1,15 @@
+{
+  "name": "manwoldae-3d",
+  "version": "1.0.0",
+  "private": true,
+  "description": "고려 개경 만월대(본궐) 3D 복원 — Three.js interactive reconstruction of the Goryeo royal palace in Kaesong",
+  "type": "module",
+  "scripts": {
+    "start": "node tools/serve.mjs",
+    "shoot": "node tools/shoot.mjs"
+  },
+  "devDependencies": {
+    "esbuild": "^0.24.0",
+    "three": "0.170.0"
+  }
+}

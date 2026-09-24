@@ -1,0 +1,33 @@
+<!doctype html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<title>재질 확인</title>
+<script type="importmap">{"imports":{"three":"https://cdn.jsdelivr.net/npm/three@0.170.0/build/three.module.js","three/addons/":"https://cdn.jsdelivr.net/npm/three@0.170.0/examples/jsm/"}}</script>
+<style>html,body{margin:0;height:100%;background:#222}canvas{display:block}</style>
+</head>
+<body>
+<script type="module">
+import * as THREE from 'three';
+import { createMaterials } from '../src/core/materials.js';
+const renderer = new THREE.WebGLRenderer({ antialias: true });
+renderer.setSize(innerWidth, innerHeight);
+document.body.appendChild(renderer.domElement);
+const scene = new THREE.Scene();
+scene.background = new THREE.Color('#9ab');
+const cam = new THREE.PerspectiveCamera(40, innerWidth / innerHeight, 0.1, 100);
+cam.position.set(0, 0, 14);
+scene.add(new THREE.HemisphereLight(0xffffff, 0x445544, 1.2));
+const sun = new THREE.DirectionalLight(0xffffff, 2); sun.position.set(3, 5, 8); scene.add(sun);
+const m = createMaterials();
+const names = Object.keys(m).filter(k => m[k]?.isMaterial);
+names.forEach((k, i) => {
+  const mesh = new THREE.Mesh(new THREE.PlaneGeometry(1.8, 1.8), m[k]);
+  mesh.position.set((i % 7) * 2 - 6, 4 - Math.floor(i / 7) * 2.1, 0);
+  scene.add(mesh);
+});
+renderer.render(scene, cam);
+window.__ready = true;
+</script>
+</body>
+</html>
