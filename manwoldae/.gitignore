@@ -1,3 +1,6 @@
 node_modules/
 shots/
 *.log
+tools/spec/env/terr13.npy
+tools/spec/spec.json
+__pycache__/
